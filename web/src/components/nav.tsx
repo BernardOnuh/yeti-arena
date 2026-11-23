@@ -3,7 +3,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { YetiMark } from "./yeti-mark";
 
-const LINKS = [["/play", "Play"], ["/leaderboard", "Leaderboard"], ["/fairness", "Fair play"]] as const;
+const LINKS = [["/play", "Ice Dash"], ["/town", "Yeti Town"], ["/leaderboard", "Leaderboard"], ["/fairness", "Fair play"]] as const;
 
 export function Nav() {
   const path = usePathname();
