@@ -7,3 +7,4 @@ next-env.d.ts
 data/
 move/yeti_arena/build/
 shots/
+.env*.local

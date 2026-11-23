@@ -14,8 +14,8 @@ Built for CLAY Hackathon III (Sui). Character art is an original yeti drawn for 
 | Server-verified scoring (seeded runs, input replay, plausibility checks, rate limits) | Done |
 | Season and daily leaderboards, guest play | Done |
 | Fair-play page with a live cheat demo | Done |
-| Sui Move package `yeti_arena::arena` with 18 tests | Done, not yet published |
-| Wallet connection, on-chain result submission, badge claim | Next |
+| Sui Move package `yeti_arena::arena` with 18 tests | Done, testnet publish next (`scripts/deploy-testnet.mjs`) |
+| Wallet connection (Sui dApp Kit), server attestation, on-chain result submission, badge claim | Done; switches on once the package is published |
 | Snowball Blitz, Yeti Memory | Later, only if Ice Dash is solid |
 
 ## How a score becomes verified
@@ -54,6 +54,23 @@ node scripts/e2e.mjs http://127.0.0.1:3300 ./shots   # from the repo root, with 
 `yeti_arena::arena`: shared `Arena` (attestor key, game version, pause switch, every used run ID) and `Season` (times, badge threshold, rules hash, best score per player). Admin: `create_arena`, `create_season`, `finalize_season`, `set_attestor`, `set_paused`, `set_game_version`. Players: `submit_attested_result`, `claim_badge`. `ScoreReceipt` and `AchievementBadge` have no `store` ability, so they can't be transferred.
 
 Tests cover: a valid result, a lower score not replacing the best, the same run twice, another wallet using someone's attestation, a tampered score, cross-season replay, a different signing key, an old game version, before and after the season, paused arena, badge threshold, double claims, early finalisation, and claiming after finalisation. The signatures in the tests come from a fixed test-only key.
+
+## On chain
+
+After a verified run, the result screen offers **Record on Sui**:
+
+1. The game asks `POST /api/runs/:id/attest` with the connected wallet's address. The server signs `"YETI_ARENA_RESULT_V1" ‖ BCS{arena, season, player, run_id, score, game_version}` with its Ed25519 attestor key. The score is the server's replay result; a run is bound to one address.
+2. The player's own wallet calls `submit_attested_result`. The Move module checks the signature against the arena's attestor key, that the attestation names the caller, the season window and game version, and that the run hasn't been used. It records the best score and sends a `ScoreReceipt`.
+3. At or above the season threshold (1,500 for Season 1), **Claim season badge** calls `claim_badge`, which mints a soulbound `AchievementBadge`, once per player per season.
+
+Publish to testnet with your own Sui CLI (its active address pays and signs; the scripts never read keys):
+
+```bash
+node scripts/attestor.mjs        # creates the attestor key in web/.env.local (git-ignored), prints the public key
+node scripts/deploy-testnet.mjs  # publish, create the Arena and Season 1, write the IDs to web/.env.local and move/deployments/testnet.json
+```
+
+Then restart the web server. Until the IDs are set, the game works as before and the result screen says on-chain badges aren't switched on yet.
 
 ## Safety
 

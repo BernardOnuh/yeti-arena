@@ -7,6 +7,7 @@ import { ArrowBigLeft, ArrowBigRight, ArrowBigUp, Pause, Play, RotateCcw, Shield
 import { DURATION_TICKS, LANES, LIVES, TICK_HZ, newState, result, step, type Action, type Input, type Result, type State } from "@/game/sim";
 import { draw, secondsLeft, type Particle, type View } from "@/game/render";
 import { sfx } from "@/game/sound";
+import { OnChain } from "./on-chain";
 
 type Phase = "ready" | "starting" | "countdown" | "playing" | "paused" | "sending" | "done" | "error";
 type Verdict = { status: "verified"; score: number; flakes: number; lives: number; survived: boolean } | { status: "rejected"; reason: string };
@@ -228,6 +229,7 @@ export function IceDash() {
                   <div className="mt-3 font-display text-6xl font-bold tabular-nums text-white">{verdict.score.toLocaleString()}</div>
                   <p className="mt-1 text-sky-100/80">{verdict.survived ? `Survived the full minute with ${verdict.lives} ${verdict.lives === 1 ? "life" : "lives"} left` : "Out of lives"} · {verdict.flakes} snowflakes</p>
                   {best !== null && verdict.score >= best && <p className="mt-2 font-bold text-amber-300">New personal best!</p>}
+                  {run.current && <OnChain runId={run.current.runId} score={verdict.score} />}
                 </>
               ) : (
                 <>

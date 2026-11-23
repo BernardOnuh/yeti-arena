@@ -1,6 +1,7 @@
 import type { Metadata, Viewport } from "next";
 import "./globals.css";
 import { Nav } from "@/components/nav";
+import { Providers } from "./providers";
 
 export const metadata: Metadata = {
   title: "Yeti Arena",
@@ -17,6 +18,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <link href="https://fonts.googleapis.com/css2?family=Fredoka:wght@500;600;700&family=Nunito:wght@400;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
       </head>
       <body className="sky-bg min-h-screen">
+        <Providers>
         <Nav />
         <main>{children}</main>
         <footer className="mt-16 border-t border-white/10">
@@ -24,6 +26,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             Free to play. No wagers, no paid entry, no tokens: badges are cosmetic achievements. Built for CLAY Hackathon III.
           </div>
         </footer>
+        </Providers>
       </body>
     </html>
   );
