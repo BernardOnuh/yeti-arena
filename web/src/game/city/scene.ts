@@ -1,10 +1,16 @@
 // Draws Sunburn City with three.js: golden-hour sky and sun, an animated ocean, pastel buildings with windows, palms,
 // ramps, the Yeti, vehicles, tourists, mission beams and a chase camera. Reads the game state; never changes it.
+// Image-based lighting from an HDRI (reflections in car paint and window glass), ambient occlusion, bloom, a film
+// colour grade and SMAA.
 import * as THREE from "three";
 import { EffectComposer } from "three/examples/jsm/postprocessing/EffectComposer.js";
 import { RenderPass } from "three/examples/jsm/postprocessing/RenderPass.js";
 import { UnrealBloomPass } from "three/examples/jsm/postprocessing/UnrealBloomPass.js";
 import { OutputPass } from "three/examples/jsm/postprocessing/OutputPass.js";
+import { ShaderPass } from "three/examples/jsm/postprocessing/ShaderPass.js";
+import { SMAAPass } from "three/examples/jsm/postprocessing/SMAAPass.js";
+import { RGBELoader } from "three/examples/jsm/loaders/RGBELoader.js";
+import { N8AOPass } from "n8ao";
 import { makePerson } from "./characters";
 import { makeYeti } from "../yeti-model";
 import { MISSIONS, objectives, speedOf, type Game, type Ped, type Vehicle } from "./game";
@@ -12,12 +18,29 @@ import { BLOCK, CITY, N, PITCH, ROAD, SAND_END, roadC } from "./world";
 
 const SUN_DIR = new THREE.Vector3(0.75, 0.32, -0.45).normalize();
 
+const GradeShader = {
+  uniforms: { tDiffuse: { value: null }, contrast: { value: 1.07 }, saturation: { value: 1.1 }, vignette: { value: 0.32 } },
+  vertexShader: "varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }",
+  fragmentShader: `uniform sampler2D tDiffuse; uniform float contrast, saturation, vignette; varying vec2 vUv;
+    void main(){
+      vec3 c = texture2D(tDiffuse, vUv).rgb;
+      float l = dot(c, vec3(0.2126, 0.7152, 0.0722));
+      c = mix(vec3(l), c, saturation);
+      c = (c - 0.5) * contrast + 0.5;
+      c += mix(vec3(-0.012, 0.004, 0.022), vec3(0.03, 0.012, -0.022), smoothstep(0.2, 0.8, l));   // cool shadows, warm highlights
+      vec2 d = vUv - 0.5; c *= 1.0 - vignette * smoothstep(0.35, 0.95, length(d * vec2(1.25, 1.0)));
+      gl_FragColor = vec4(clamp(c, 0.0, 1.0), 1.0);
+    }`,
+};
+
 function canvasTexture(w: number, h: number, draw: (c: CanvasRenderingContext2D) => void) {
   const cv = document.createElement("canvas"); cv.width = w; cv.height = h; draw(cv.getContext("2d")!);
   const t = new THREE.CanvasTexture(cv); t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 4; return t;
 }
 
 const mat = (color: string, extra: THREE.MeshStandardMaterialParameters = {}) => new THREE.MeshStandardMaterial({ color, roughness: 0.85, ...extra });
+/** Car paint: a glossy clear coat over a slightly metallic base. */
+const paint = (color: string) => new THREE.MeshPhysicalMaterial({ color, roughness: 0.42, metalness: 0.35, clearcoat: 1, clearcoatRoughness: 0.06, envMapIntensity: 1.2 });
 function mesh(geo: THREE.BufferGeometry, m: THREE.Material, x = 0, y = 0, z = 0, shadow = true) {
   const o = new THREE.Mesh(geo, m); o.position.set(x, y, z); o.castShadow = shadow; o.receiveShadow = true; return o;
 }
@@ -47,24 +70,48 @@ export function createScene(canvas: HTMLCanvasElement, g: Game) {
   scene.add(sky);
 
   // ---------- light ----------
-  scene.add(new THREE.HemisphereLight("#ffe3c4", "#c79a6a", 1.6));
+  scene.add(new THREE.HemisphereLight("#ffe3c4", "#c79a6a", 0.55));
+  // image-based lighting: a real sky lights the city and is what car paint and window glass reflect
+  const pmrem = new THREE.PMREMGenerator(renderer);
+  new RGBELoader().load("/env/spruit_sunrise_1k.hdr", hdr => {
+    const env = pmrem.fromEquirectangular(hdr).texture; hdr.dispose(); pmrem.dispose();
+    scene.environment = env; scene.environmentIntensity = 0.85;
+  });
   const sun = new THREE.DirectionalLight("#ffc68f", 3.0);
-  sun.castShadow = true; sun.shadow.mapSize.set(2048, 2048);
-  Object.assign(sun.shadow.camera, { left: -75, right: 75, top: 75, bottom: -75, near: 1, far: 400 });
+  sun.castShadow = true; sun.shadow.mapSize.set(4096, 4096);
+  Object.assign(sun.shadow.camera, { left: -60, right: 60, top: 60, bottom: -60, near: 1, far: 400 });
   sun.shadow.bias = -0.0005; sun.shadow.normalBias = 0.04;
   scene.add(sun, sun.target);
   const rim = new THREE.DirectionalLight("#9fc8ff", 1.1); rim.position.set(-80, 50, 90); scene.add(rim); // cool back light so characters pop
   const composer = new EffectComposer(renderer, new THREE.WebGLRenderTarget(1, 1, { samples: 4, type: THREE.HalfFloatType }));
-  composer.addPass(new RenderPass(scene, camera));
-  const bloom = new UnrealBloomPass(new THREE.Vector2(1, 1), 0.32, 0.55, 0.86); composer.addPass(bloom);
+  const ao = new N8AOPass(scene, camera, 1, 1);
+  Object.assign(ao.configuration, { aoRadius: 2.5, distanceFalloff: 1.2, intensity: 2.2, color: new THREE.Color("#1a2238"), gammaCorrection: false }); // OutputPass does the colour conversion
+  ao.setQualityMode("Medium");
+  composer.addPass(ao);
+  const bloom = new UnrealBloomPass(new THREE.Vector2(1, 1), 0.22, 0.5, 0.9); composer.addPass(bloom);
   composer.addPass(new OutputPass());
+  composer.addPass(new ShaderPass(GradeShader));
+  const smaa = new SMAAPass(1, 1); composer.addPass(smaa);
 
   // ---------- ground: grass, asphalt, sidewalks, sand, ocean ----------
   const grass = mesh(new THREE.PlaneGeometry(2400, 2400), mat("#97c56e"), CITY / 2 - 600, -0.05, CITY / 2, false); grass.rotation.x = -Math.PI / 2; scene.add(grass);
-  const asphalt = mesh(new THREE.PlaneGeometry(CITY, CITY), mat("#737886", { roughness: 0.95 }), CITY / 2, 0, CITY / 2, false); asphalt.rotation.x = -Math.PI / 2; scene.add(asphalt);
+  const asphaltTex = canvasTexture(256, 256, c => {
+    c.fillStyle = "#6c717d"; c.fillRect(0, 0, 256, 256);
+    for (let i = 0; i < 9000; i++) { const v = 90 + Math.random() * 60; c.fillStyle = `rgba(${v},${v + 2},${v + 8},${0.25 + Math.random() * 0.3})`; c.fillRect(Math.random() * 256, Math.random() * 256, 1.5, 1.5); }
+    c.strokeStyle = "rgba(40,42,50,.35)"; c.lineWidth = 1;
+    for (let i = 0; i < 6; i++) { c.beginPath(); let x = Math.random() * 256, y = Math.random() * 256; c.moveTo(x, y); for (let k = 0; k < 5; k++) { x += (Math.random() - 0.5) * 40; y += (Math.random() - 0.5) * 40; c.lineTo(x, y); } c.stroke(); }  // cracks
+  });
+  asphaltTex.wrapS = asphaltTex.wrapT = THREE.RepeatWrapping; asphaltTex.repeat.set(CITY / 8, CITY / 8);
+  const asphalt = mesh(new THREE.PlaneGeometry(CITY, CITY), mat("#ffffff", { map: asphaltTex, roughness: 0.88 }), CITY / 2, 0, CITY / 2, false); asphalt.rotation.x = -Math.PI / 2; scene.add(asphalt);
   const sand = mesh(new THREE.PlaneGeometry(SAND_END - CITY + 30, 2400), mat("#f2d39a", { roughness: 1 }), (CITY + SAND_END + 30) / 2, 0.005, CITY / 2, false); sand.rotation.x = -Math.PI / 2; scene.add(sand);
   const boardwalk = mesh(new THREE.BoxGeometry(7, 0.18, 2400), mat("#c4935f"), CITY + 3.5, 0.09, CITY / 2, false); scene.add(boardwalk);
-  const sidewalkMat = mat("#efe4d2"), parkMat = mat("#86c56a"), plazaMat = mat("#f4dfb8");
+  const paving = canvasTexture(128, 128, c => {
+    c.fillStyle = "#ece2d0"; c.fillRect(0, 0, 128, 128);
+    for (let i = 0; i < 2500; i++) { const v = 200 + Math.random() * 40; c.fillStyle = `rgba(${v},${v - 6},${v - 18},.35)`; c.fillRect(Math.random() * 128, Math.random() * 128, 1, 1); }
+    c.strokeStyle = "rgba(120,105,85,.45)"; c.lineWidth = 2; for (const p of [0, 64]) { c.beginPath(); c.moveTo(p, 0); c.lineTo(p, 128); c.moveTo(0, p); c.lineTo(128, p); c.stroke(); }  // paving joints
+  });
+  paving.wrapS = paving.wrapT = THREE.RepeatWrapping; paving.repeat.set(BLOCK / 3, BLOCK / 3);
+  const sidewalkMat = mat("#ffffff", { map: paving, roughness: 0.8 }), parkMat = mat("#86c56a"), plazaMat = mat("#f4dfb8");
   for (let bz = 0; bz < N; bz++) for (let bx = 0; bx < N; bx++) {
     const k = `${bx},${bz}`, m = k === "2,2" ? plazaMat : k === "1,3" || k === "3,1" ? parkMat : sidewalkMat;
     scene.add(mesh(new THREE.BoxGeometry(BLOCK, 0.12, BLOCK), m, ROAD + bx * PITCH + BLOCK / 2, 0.06, ROAD + bz * PITCH + BLOCK / 2, false));
@@ -118,6 +165,11 @@ export function createScene(canvas: HTMLCanvasElement, g: Game) {
     }
   });
   windows.wrapS = windows.wrapT = THREE.RepeatWrapping;
+  const windowGloss = canvasTexture(128, 128, c => {       // roughness: matte walls (light), glossy panes (dark)
+    c.fillStyle = "#d8d8d8"; c.fillRect(0, 0, 128, 128); c.fillStyle = "#111111";
+    for (const [x, y] of [[14, 12], [76, 12], [14, 74], [76, 74]]) c.fillRect(x, y, 38, 44);
+  });
+  windowGloss.colorSpace = THREE.NoColorSpace; windowGloss.wrapS = windowGloss.wrapT = THREE.RepeatWrapping;
   for (const b of g.world.buildings) {
     const w = b.x1 - b.x0, d = b.z1 - b.z0;
     const geo = new THREE.BoxGeometry(w, b.h, d), uv = geo.attributes.uv as THREE.BufferAttribute;
@@ -126,7 +178,7 @@ export function createScene(canvas: HTMLCanvasElement, g: Game) {
       const i = f * 4 + v, [fu, fv] = faces[f];
       uv.setXY(i, fu ? uv.getX(i) * (fu / 5.5) : 0.02, fv ? uv.getY(i) * (fv / 5.5) : 0.98);
     }
-    const body = mesh(geo, mat(b.color, { map: windows, roughness: 0.8 }), (b.x0 + b.x1) / 2, b.h / 2, (b.z0 + b.z1) / 2);
+    const body = mesh(geo, mat(b.color, { map: windows, roughnessMap: windowGloss, roughness: 1, metalness: 0.05, envMapIntensity: 1.4 }), (b.x0 + b.x1) / 2, b.h / 2, (b.z0 + b.z1) / 2);
     scene.add(body);
     scene.add(mesh(new THREE.BoxGeometry(w + 0.5, 0.5, d + 0.5), mat(b.roof), body.position.x, b.h + 0.25, body.position.z));
     if (w > 8 && d > 8 && !b.sign) scene.add(mesh(new THREE.BoxGeometry(2.4, 1.6, 2.4), mat("#d9d4c8"), b.x0 + 3, b.h + 1.3, b.z0 + 3));
@@ -291,7 +343,7 @@ export function createScene(canvas: HTMLCanvasElement, g: Game) {
 
   return {
     update,
-    resize(w: number, h: number) { renderer.setSize(w, h, false); composer.setPixelRatio(renderer.getPixelRatio()); composer.setSize(w, h); bloom.resolution.set(w, h); camera.aspect = w / h; camera.updateProjectionMatrix(); },
+    resize(w: number, h: number) { renderer.setSize(w, h, false); composer.setPixelRatio(renderer.getPixelRatio()); composer.setSize(w, h); bloom.resolution.set(w, h); ao.setSize(w, h); camera.aspect = w / h; camera.updateProjectionMatrix(); },
     dispose() {
       scene.traverse(o => { const m = o as THREE.Mesh; m.geometry?.dispose(); const mt = m.material as THREE.Material | THREE.Material[] | undefined; if (Array.isArray(mt)) mt.forEach(x => x.dispose()); else mt?.dispose(); });
       composer.dispose(); renderer.dispose();
@@ -307,7 +359,7 @@ function makeVehicle(v: Vehicle) {
   const wheel = (x: number, z: number) => { const w = new THREE.Group(); w.position.set(x, wheelGeo.parameters.radiusTop, z); w.add(mesh(wheelGeo, tire), mesh(new THREE.BoxGeometry(0.5, 0.12, 0.47), hub)); root.add(w); wheels.push(w); };
   let lights: THREE.MeshStandardMaterial[] | undefined, driver: ReturnType<typeof makePerson> | undefined;
   if (v.kind === "buggy") {
-    root.add(mesh(new THREE.BoxGeometry(3.4, 0.55, 1.9), mat(v.color), 0, 0.85, 0));
+    root.add(mesh(new THREE.BoxGeometry(3.4, 0.55, 1.9), paint(v.color), 0, 0.85, 0));
     root.add(mesh(new THREE.BoxGeometry(1.1, 0.35, 1.7), mat("#ffd166"), 1.3, 1.25, 0));
     const bar = mat("#2b2d33", { metalness: 0.6, roughness: 0.4 });
     for (const [x, z] of [[-0.9, -0.85], [-0.9, 0.85], [0.6, -0.85], [0.6, 0.85]]) root.add(mesh(new THREE.CylinderGeometry(0.06, 0.06, 1.7), bar, x, 1.95, z));
@@ -323,10 +375,10 @@ function makeVehicle(v: Vehicle) {
     root.add(mesh(new THREE.SphereGeometry(0.2, 10, 8), mat("#e0254f"), -0.6, 6.4, 0));
     for (const [x, z] of [[1.9, -1.15], [1.9, 1.15], [-2, -1.15], [-2, 1.15]]) wheel(x, z);
   } else {
-    root.add(mesh(new THREE.BoxGeometry(4, 0.8, 1.95), mat(v.color, { roughness: 0.45, metalness: 0.15 }), 0, 0.85, 0));
-    const glass = new THREE.MeshStandardMaterial({ color: "#9fc4e8", roughness: 0.05, metalness: 0.2, transparent: true, opacity: 0.32, depthWrite: false });
+    root.add(mesh(new THREE.BoxGeometry(4, 0.8, 1.95), paint(v.color), 0, 0.85, 0));
+    const glass = new THREE.MeshPhysicalMaterial({ color: "#9fc4e8", roughness: 0.03, metalness: 0.1, transparent: true, opacity: 0.4, depthWrite: false, envMapIntensity: 1.6 });
     root.add(mesh(new THREE.BoxGeometry(2.1, 0.75, 1.75), glass, -0.25, 1.62, 0, false));
-    root.add(mesh(new THREE.BoxGeometry(2.14, 0.08, 1.79), mat(v.color), -0.25, 2.0, 0)); // the roof
+    root.add(mesh(new THREE.BoxGeometry(2.14, 0.08, 1.79), paint(v.color), -0.25, 2.0, 0)); // the roof
     driver = makePerson(v.id * 104729 + 17, v.kind === "lifeguard" ? "lifeguard" : "driver"); driver.root.scale.setScalar(0.62); driver.root.position.set(-0.15, 0.55, -0.4); root.add(driver.root);
     if (v.kind === "lifeguard") {
       root.add(mesh(new THREE.BoxGeometry(4.02, 0.22, 1.97), mat("#ffffff"), 0, 0.95, 0));
