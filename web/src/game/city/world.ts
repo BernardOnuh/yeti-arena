@@ -13,9 +13,14 @@ export interface Circle { x: number; z: number; r: number }
 export interface Place { id: string; label: string; x: number; z: number; spawn?: { x: number; z: number; h: number } }
 export interface Ramp extends Box { h: number }   // rises along +z from z0 to z1
 
+/** Street furniture. h is the heading the object faces (toward the road, for lamps and traffic lights). */
+export interface Prop { x: number; z: number; h: number }
+export interface Props { lamps: Prop[]; signals: (Prop & { axis: 0 | 1 })[]; benches: Prop[]; bins: Prop[]; hydrants: Prop[]; lanterns: Prop[] }
+
 export interface World {
   buildings: Building[]; palms: Circle[]; solids: Circle[]; ramps: Ramp[]; places: Record<string, Place>;
   coolers: { x: number; z: number }[]; parked: { x: number; z: number; h: number; kind: "buggy" | "truck" }[]; walkways: { a: [number, number]; b: [number, number] }[];
+  props: Props;
 }
 
 function rng(seed: number) { let s = seed >>> 0 || 1; return () => ((s = Math.imul(s ^ (s >>> 15), 0x2c1b3c6d) + 0x297a2d39 >>> 0) / 4294967296); }
@@ -74,13 +79,35 @@ export function makeWorld(seed = 11): World {
     const clear = coolers.every(c => Math.hypot(c.x - p.x, c.z - p.z) > 8) && ramps.every(rp => p.x < rp.x0 - 4 || p.x > rp.x1 + 4) && Math.hypot(p.x - (CITY + 20), p.z - 16) > 8;
     if (clear) palms.push(p);
   }
+  // street furniture along every block's sidewalk: lamps facing the road, traffic signals at the corners,
+  // and benches, bins and hydrants in between; lanterns along the boardwalk
+  const props: Props = { lamps: [], signals: [], benches: [], bins: [], hydrants: [], lanterns: [] };
+  for (let bz = 0; bz < N; bz++) for (let bx = 0; bx < N; bx++) {
+    const x0 = ROAD + bx * PITCH, z0 = ROAD + bz * PITCH, x1 = x0 + BLOCK, z1 = z0 + BLOCK;
+    const edges: [number, number, number, number, number][] = [   // start x, start z, step x, step z, heading toward the road
+      [x0 + 1.0, z0 + 7, 0, 1, Math.PI], [x1 - 1.0, z0 + 7, 0, 1, 0], [x0 + 7, z0 + 1.0, 1, 0, -Math.PI / 2], [x0 + 7, z1 - 1.0, 1, 0, Math.PI / 2],
+    ];
+    for (const [sx, sz, dx, dz, h] of edges) for (let k = 0; k < 3; k++) {
+      const x = sx + dx * k * 13, z = sz + dz * k * 13;
+      props.lamps.push({ x, z, h });
+      const pick = r(), ox = x + dx * 4.5 - Math.cos(h) * 0.4, oz = z + dz * 4.5 - Math.sin(h) * 0.4;
+      if (pick < 0.3) props.benches.push({ x: ox - Math.cos(h) * 0.5, z: oz - Math.sin(h) * 0.5, h: h + Math.PI });
+      else if (pick < 0.55) props.bins.push({ x: ox, z: oz, h });
+      else if (pick < 0.68) props.hydrants.push({ x: ox, z: oz, h });
+    }
+    // a traffic signal at two opposite corners of every block, one for each direction of travel
+    props.signals.push({ x: x0 + 0.8, z: z0 + 0.8, h: Math.PI * 1.25, axis: 0 }, { x: x1 - 0.8, z: z1 - 0.8, h: Math.PI * 0.25, axis: 1 });
+  }
+  for (let z = 10; z < CITY; z += 26) props.lanterns.push({ x: CITY + 6.4, z, h: 0 });
+  for (const l of [...props.lamps, ...props.signals, ...props.lanterns]) solids.push({ x: l.x, z: l.z, r: 0.22 });
+  for (const b of [...props.bins, ...props.hydrants]) solids.push({ x: b.x, z: b.z, r: 0.35 });
   for (const p of palms) solids.push(p);
 
   const parked: World["parked"] = [
     { ...places.cave.spawn!, kind: "buggy" }, { x: CITY + 12, z: 40, h: Math.PI / 2, kind: "buggy" }, { x: places.plaza.x + 12, z: places.plaza.z + 10, h: 0, kind: "buggy" },
     { x: places.lifeguard.spawn!.x - 20, z: places.lifeguard.spawn!.z, h: 0, kind: "buggy" }, { ...places.depot.spawn!, kind: "truck" },
   ];
-  return { buildings, palms, solids, ramps, places, coolers, parked, walkways };
+  return { buildings, palms, solids, ramps, places, coolers, parked, walkways, props };
 }
 
 /** Pushes a circle out of buildings, solid circles and the edges of the map. Returns the push normal if it hit. */

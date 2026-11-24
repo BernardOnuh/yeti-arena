@@ -83,6 +83,8 @@ Then restart the web server. Until the IDs are set, the game works as before and
 
 - Sky lighting: "Spruit Sunrise" HDRI from [Poly Haven](https://polyhaven.com/a/spruit_sunrise) (CC0).
 - Wall texture: "Painted Plaster Wall" from [Poly Haven](https://polyhaven.com/a/painted_plaster_wall) (CC0).
+- Car model: "Car Concept" by Eric Chadwick, Darmstadt Graphics Group GmbH, from the [Khronos glTF Sample Assets](https://github.com/KhronosGroup/glTF-Sample-Assets/tree/main/Models/CarConcept), [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). Modified: the licence plate (a Khronos logo) is replaced with our own, tyre sidewall lettering removed, glass simplified, meshes merged, paint recoloured.
+- Boardwalk lantern: "Lantern" by sbtron (Microsoft), from the Khronos glTF Sample Assets (CC0).
 - Ambient occlusion: [N8AO](https://github.com/N8python/n8ao) (MIT).
 
 ## Licence

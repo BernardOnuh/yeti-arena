@@ -183,7 +183,7 @@ export function SunburnCity() {
           <button className="pad col-span-2 !w-full !bg-amber-300 !text-night" {...touch("action")}>E</button>
         </div>
       </div>
-      <p className="mt-3 text-center text-[12px] text-sky-100/50">Sunburn City is an original game: a sandbox whose coins are saved in this browser only. Ice Dash scores are the server-verified, on-chain ones.</p>
+      <p className="mt-3 text-center text-[12px] text-sky-100/50">Sunburn City is an original game: a sandbox whose coins are saved in this browser only. Ice Dash scores are the server-verified, on-chain ones. Car model: “Car Concept” by Eric Chadwick (CC BY 4.0), modified.</p>
     </div>
   );
 }

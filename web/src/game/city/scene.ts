@@ -13,6 +13,8 @@ import { RGBELoader } from "three/examples/jsm/loaders/RGBELoader.js";
 import { N8AOPass } from "n8ao";
 import { makePerson } from "./characters";
 import { facadeMaterial, snowfall, snowify, weather } from "./weather";
+import { buildProps } from "./props";
+import { loadCar, type CarTemplate } from "./car-model";
 import { makeYeti } from "../yeti-model";
 import { MISSIONS, objectives, speedOf, type Game, type Ped, type Vehicle } from "./game";
 import { BLOCK, CITY, N, PITCH, ROAD, SAND_END, roadC } from "./world";
@@ -250,6 +252,10 @@ export function createScene(canvas: HTMLCanvasElement, g: Game) {
   let camYaw = g.yeti.h, fov = 62;
   const camPos = new THREE.Vector3(g.yeti.x - 8, 5, g.yeti.z), look = new THREE.Vector3(g.yeti.x, 1, g.yeti.z);
 
+  const street = buildProps(g.world.props, scene);
+  let lanternsSnowed = false;
+  let carTpl: CarTemplate | null = null; loadCar(t => (carTpl = t));
+  const HI_CARS = 8, HI_RANGE = 75;
   snowify(scene);
   const flakes = snowfall(); scene.add(flakes.points);
   const SUNNY = { fog: new THREE.Color("#ffd2a6"), sun: new THREE.Color("#ffc68f"), sky: new THREE.Color("#ffe3c4"), dash: new THREE.Color("#ffe9a8") };
@@ -284,6 +290,16 @@ export function createScene(canvas: HTMLCanvasElement, g: Game) {
       if (m.lights) { const on = Math.floor(t * 8) % 2 === 0; m.lights[0].emissiveIntensity = on ? 2.2 : 0.1; m.lights[1].emissiveIntensity = on ? 0.1 : 2.2; }
     }
     for (const [id, m] of cars) if (!alive.has(id)) { scene.remove(m.root); cars.delete(id); }
+    // detailed cars for the nearest few, simple ones beyond
+    const near: { m: ReturnType<typeof makeVehicle>; d: number }[] = [];
+    for (const v of g.vehicles) {
+      const m = cars.get(v.id)!; if (v.kind !== "car") continue;
+      if (carTpl && !m.hi) { m.hi = carTpl.make(v.color); snowify(m.hi); m.root.add(m.hi); }
+      if (m.hi) near.push({ m, d: camera.position.distanceTo(m.root.position) });
+    }
+    near.sort((a, b) => a.d - b.d).forEach(({ m, d }, i) => { const hi = i < HI_CARS && d < HI_RANGE; m.hi!.visible = hi; m.lo.visible = !hi; if (m.driver) m.driver.root.visible = !hi && m.driver.root.visible; });  // the detailed car's tinted glass hides its cabin
+    street.update(t, wt);
+    if (street.loaded.lanterns && !lanternsSnowed) { snowify(street.group); lanternsSnowed = true; }
 
     // the Yeti: walking, or sitting in the buggy (hidden inside closed cars)
     const c = g.car;
@@ -400,5 +416,7 @@ function makeVehicle(v: Vehicle) {
     }
     for (const [x, z] of [[1.35, -1.0], [1.35, 1.0], [-1.35, -1.0], [-1.35, 1.0]]) wheel(x, z);
   }
-  return { root, wheels, lights, driver };
+  // the simple model is the far-away level of detail; near the camera a detailed car can take its place
+  const lo = new THREE.Group(); for (const c of [...root.children]) if (c !== driver?.root) lo.add(c); root.add(lo);
+  return { root, wheels, lights, driver, lo, hi: null as THREE.Group | null };
 }
