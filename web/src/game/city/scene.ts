@@ -1,6 +1,11 @@
 // Draws Sunburn City with three.js: golden-hour sky and sun, an animated ocean, pastel buildings with windows, palms,
 // ramps, the Yeti, vehicles, tourists, mission beams and a chase camera. Reads the game state; never changes it.
 import * as THREE from "three";
+import { EffectComposer } from "three/examples/jsm/postprocessing/EffectComposer.js";
+import { RenderPass } from "three/examples/jsm/postprocessing/RenderPass.js";
+import { UnrealBloomPass } from "three/examples/jsm/postprocessing/UnrealBloomPass.js";
+import { OutputPass } from "three/examples/jsm/postprocessing/OutputPass.js";
+import { makePerson, makeYeti } from "./characters";
 import { MISSIONS, objectives, speedOf, type Game, type Ped, type Vehicle } from "./game";
 import { BLOCK, CITY, N, PITCH, ROAD, SAND_END, roadC } from "./world";
 
@@ -47,6 +52,11 @@ export function createScene(canvas: HTMLCanvasElement, g: Game) {
   Object.assign(sun.shadow.camera, { left: -75, right: 75, top: 75, bottom: -75, near: 1, far: 400 });
   sun.shadow.bias = -0.0005; sun.shadow.normalBias = 0.04;
   scene.add(sun, sun.target);
+  const rim = new THREE.DirectionalLight("#9fc8ff", 1.1); rim.position.set(-80, 50, 90); scene.add(rim); // cool back light so characters pop
+  const composer = new EffectComposer(renderer, new THREE.WebGLRenderTarget(1, 1, { samples: 4, type: THREE.HalfFloatType }));
+  composer.addPass(new RenderPass(scene, camera));
+  const bloom = new UnrealBloomPass(new THREE.Vector2(1, 1), 0.32, 0.55, 0.86); composer.addPass(bloom);
+  composer.addPass(new OutputPass());
 
   // ---------- ground: grass, asphalt, sidewalks, sand, ocean ----------
   const grass = mesh(new THREE.PlaneGeometry(2400, 2400), mat("#97c56e"), CITY / 2 - 600, -0.05, CITY / 2, false); grass.rotation.x = -Math.PI / 2; scene.add(grass);
@@ -171,10 +181,11 @@ export function createScene(canvas: HTMLCanvasElement, g: Game) {
 
   // ---------- the Yeti ----------
   const yeti = makeYeti(); scene.add(yeti.root);
+  let anim = 0, orbit = 0, lastWalk = 0;
 
   // ---------- vehicles, tourists, coolers, beams ----------
   const cars = new Map<number, ReturnType<typeof makeVehicle>>();
-  const pedMeshes = g.peds.map(p => { const m = makePed(p.shirt); scene.add(m.root); return m; });
+  const pedMeshes = g.peds.map((_, i) => { const m = makePerson(1000 + i * 7919); m.root.scale.setScalar(0.95); scene.add(m.root); return m; });
   const coolerGeo = new THREE.BoxGeometry(1.2, 0.8, 0.8), coolerMat = mat("#2f8fe0"), lidMat = mat("#ffffff");
   const coolers = g.world.coolers.map(c => {
     const grp = new THREE.Group(); grp.add(mesh(coolerGeo, coolerMat), mesh(new THREE.BoxGeometry(1.26, 0.2, 0.86), lidMat, 0, 0.5, 0));
@@ -190,8 +201,8 @@ export function createScene(canvas: HTMLCanvasElement, g: Game) {
   let camYaw = g.yeti.h, fov = 62;
   const camPos = new THREE.Vector3(g.yeti.x - 8, 5, g.yeti.z), look = new THREE.Vector3(g.yeti.x, 1, g.yeti.z);
 
-  function update(dt: number) {
-    const t = g.time;
+  function update(dt: number, real: number, title = false) {
+    const t = g.time; anim += real;
     (ocean.material as THREE.ShaderMaterial).uniforms.time.value = t;
     jet.scale.y = 1 + Math.sin(t * 6) * 0.08;
 
@@ -204,6 +215,7 @@ export function createScene(canvas: HTMLCanvasElement, g: Game) {
       m.root.position.set(v.x, v.y, v.z); m.root.rotation.set(0, -v.h, 0);
       if (v.air > 0) m.root.rotation.z = Math.max(-0.35, Math.min(0.35, v.vy * 0.04));
       for (const wh of m.wheels) wh.rotation.z = -v.wheel;
+      if (m.driver) { m.driver.root.visible = v.ai !== "parked"; m.driver.pose(anim, "sit"); }
       if (m.lights) { const on = Math.floor(t * 8) % 2 === 0; m.lights[0].emissiveIntensity = on ? 2.2 : 0.1; m.lights[1].emissiveIntensity = on ? 0.1 : 2.2; }
     }
     for (const [id, m] of cars) if (!alive.has(id)) { scene.remove(m.root); cars.delete(id); }
@@ -214,19 +226,20 @@ export function createScene(canvas: HTMLCanvasElement, g: Game) {
       const seatBack = c.kind === "truck" ? 1.2 : 0.4;
       yeti.root.visible = c.kind === "buggy";
       yeti.root.position.set(c.x - Math.cos(c.h) * seatBack, c.y + 0.45, c.z - Math.sin(c.h) * seatBack); yeti.root.rotation.set(0, -c.h, 0); yeti.root.scale.setScalar(0.62);
-      yeti.pose(0, true);
+      yeti.pose(anim, 0, "sit", false);
     } else {
       yeti.root.visible = true; yeti.root.scale.setScalar(0.72);
       yeti.root.position.set(g.yeti.x, 0.12, g.yeti.z); yeti.root.rotation.set(0, -g.yeti.h, 0);
-      yeti.pose(g.yeti.walk, false);
+      const moving = Math.abs(g.yeti.walk - lastWalk) > 1e-4; lastWalk = g.yeti.walk;
+      yeti.pose(anim, g.yeti.walk, title ? "wave" : "walk", moving && !title);
     }
 
     // tourists
     g.peds.forEach((p: Ped, i) => {
       const m = pedMeshes[i];
       m.root.position.set(p.x, 0.12 + p.y, p.z);
-      if (p.down > 0) { m.root.rotation.set(p.y > 0.05 ? t * p.spin : 0, -p.h, p.y > 0.05 ? t * p.spin * 0.7 : Math.PI / 2); }
-      else { m.root.rotation.set(0, -p.h, 0); m.legs[0].rotation.z = Math.sin(t * 8 + i) * 0.5; m.legs[1].rotation.z = -Math.sin(t * 8 + i) * 0.5; }
+      if (p.down > 0) { m.root.rotation.set(p.y > 0.05 ? t * p.spin : 0, -p.h, p.y > 0.05 ? t * p.spin * 0.7 : Math.PI / 2); m.pose(anim, "flail"); }
+      else { m.root.rotation.set(0, -p.h, 0); m.pose(anim, "walk"); }
     });
 
     // coolers and beams
@@ -254,6 +267,15 @@ export function createScene(canvas: HTMLCanvasElement, g: Game) {
     const wantPos = new THREE.Vector3(px - Math.cos(camYaw) * back, py + up, pz - Math.sin(camYaw) * back);
     camPos.lerp(wantPos, 1 - Math.exp(-dt * 6));
     look.lerp(new THREE.Vector3(px + Math.cos(camYaw) * 4, py + 1.4, pz + Math.sin(camYaw) * 4), 1 - Math.exp(-dt * 10));
+    if (title) {
+      // title screen: a slow orbit in front of the waving Yeti
+      orbit += real * 0.18;
+      const a2 = g.yeti.h + 0.2 + Math.sin(orbit) * 0.7;
+      camPos.set(g.yeti.x + Math.cos(a2) * 5.2, 2.1, g.yeti.z + Math.sin(a2) * 5.2);
+      // aim a little to the Yeti's left so it stands on the right of the frame, beside the title text
+      const dx = -Math.cos(a2), dz = -Math.sin(a2), side = window.innerWidth < 640 ? 0 : 1.7;
+      look.set(g.yeti.x + dz * side, 1.35, g.yeti.z - dx * side);
+    }
     camera.position.copy(camPos);
     if (g.shake > 0) camera.position.add(new THREE.Vector3((Math.random() - 0.5) * g.shake, (Math.random() - 0.5) * g.shake, (Math.random() - 0.5) * g.shake));
     camera.lookAt(look);
@@ -263,52 +285,26 @@ export function createScene(canvas: HTMLCanvasElement, g: Game) {
 
     // the sun's shadow box follows the player
     sun.position.set(px + SUN_DIR.x * 150, SUN_DIR.y * 150, pz + SUN_DIR.z * 150); sun.target.position.set(px, 0, pz);
-    renderer.render(scene, camera);
+    composer.render();
   }
 
   return {
     update,
-    resize(w: number, h: number) { renderer.setSize(w, h, false); camera.aspect = w / h; camera.updateProjectionMatrix(); },
+    resize(w: number, h: number) { renderer.setSize(w, h, false); composer.setPixelRatio(renderer.getPixelRatio()); composer.setSize(w, h); bloom.resolution.set(w, h); camera.aspect = w / h; camera.updateProjectionMatrix(); },
     dispose() {
       scene.traverse(o => { const m = o as THREE.Mesh; m.geometry?.dispose(); const mt = m.material as THREE.Material | THREE.Material[] | undefined; if (Array.isArray(mt)) mt.forEach(x => x.dispose()); else mt?.dispose(); });
-      renderer.dispose();
+      composer.dispose(); renderer.dispose();
     },
   };
 }
 
 // ---------- models (all face +X) ----------
-function makeYeti() {
-  const root = new THREE.Group(), fur = mat("#f7f9fc", { roughness: 1 });
-  const shirtTex = canvasTexture(128, 64, c => {
-    c.fillStyle = "#ff7a59"; c.fillRect(0, 0, 128, 64);
-    for (let i = 0; i < 14; i++) { const x = (i * 37) % 128, y = (i * 23) % 64; c.fillStyle = i % 2 ? "#ffe066" : "#ffffff"; for (let p = 0; p < 5; p++) { c.beginPath(); c.arc(x + Math.cos(p * 1.26) * 4, y + Math.sin(p * 1.26) * 4, 3, 0, 7); c.fill(); } c.fillStyle = "#ff3d6e"; c.beginPath(); c.arc(x, y, 2, 0, 7); c.fill(); }
-  });
-  const body = mesh(new THREE.SphereGeometry(0.95, 24, 18), fur, 0, 1.45, 0); body.scale.set(0.95, 1.12, 1); root.add(body);
-  root.add(mesh(new THREE.CylinderGeometry(0.99, 1.02, 0.95, 24), mat("#ffffff", { map: shirtTex }), 0, 1.2, 0));
-  const head = mesh(new THREE.SphereGeometry(0.66, 24, 18), fur, 0.05, 2.5, 0); root.add(head);
-  const face = mesh(new THREE.SphereGeometry(0.42, 20, 14), mat("#8fd3ff"), 0.42, 2.45, 0); face.scale.set(0.5, 0.85, 1); root.add(face);
-  root.add(mesh(new THREE.BoxGeometry(0.12, 0.17, 0.7), mat("#111111", { roughness: 0.2, metalness: 0.4 }), 0.66, 2.58, 0));   // sunglasses
-  for (const s of [-1, 1]) root.add(mesh(new THREE.SphereGeometry(0.18, 10, 8), fur, 0, 3.05, s * 0.4));                      // ears
-  const limb = new THREE.CapsuleGeometry(0.24, 0.7, 4, 10);
-  const arms = [-1, 1].map(s => { const p = new THREE.Group(); p.position.set(0, 1.95, s * 0.98); p.add(mesh(limb, fur, 0, -0.45, 0)); root.add(p); return p; });
-  const legs = [-1, 1].map(s => { const p = new THREE.Group(); p.position.set(0, 0.75, s * 0.42); p.add(mesh(limb, fur, 0, -0.38, 0)); root.add(p); return p; });
-  return {
-    root,
-    pose(walk: number, sitting: boolean) {
-      const sw = Math.sin(walk) * 0.7;
-      arms[0].rotation.z = sitting ? 1.1 : sw; arms[1].rotation.z = sitting ? 1.1 : -sw;
-      legs[0].rotation.z = sitting ? 1.4 : -sw; legs[1].rotation.z = sitting ? 1.4 : sw;
-      body.position.y = 1.45 + (sitting ? 0 : Math.abs(Math.cos(walk)) * 0.08);
-    },
-  };
-}
-
 function makeVehicle(v: Vehicle) {
   const root = new THREE.Group(), wheels: THREE.Object3D[] = [];
   const wheelGeo = new THREE.CylinderGeometry(v.kind === "truck" ? 0.62 : 0.55, v.kind === "truck" ? 0.62 : 0.55, 0.45, 16); wheelGeo.rotateX(Math.PI / 2);
   const tire = mat("#1d1f24"), hub = mat("#d9d9d9");
   const wheel = (x: number, z: number) => { const w = new THREE.Group(); w.position.set(x, wheelGeo.parameters.radiusTop, z); w.add(mesh(wheelGeo, tire), mesh(new THREE.BoxGeometry(0.5, 0.12, 0.47), hub)); root.add(w); wheels.push(w); };
-  let lights: THREE.MeshStandardMaterial[] | undefined;
+  let lights: THREE.MeshStandardMaterial[] | undefined, driver: ReturnType<typeof makePerson> | undefined;
   if (v.kind === "buggy") {
     root.add(mesh(new THREE.BoxGeometry(3.4, 0.55, 1.9), mat(v.color), 0, 0.85, 0));
     root.add(mesh(new THREE.BoxGeometry(1.1, 0.35, 1.7), mat("#ffd166"), 1.3, 1.25, 0));
@@ -327,22 +323,16 @@ function makeVehicle(v: Vehicle) {
     for (const [x, z] of [[1.9, -1.15], [1.9, 1.15], [-2, -1.15], [-2, 1.15]]) wheel(x, z);
   } else {
     root.add(mesh(new THREE.BoxGeometry(4, 0.8, 1.95), mat(v.color, { roughness: 0.45, metalness: 0.15 }), 0, 0.85, 0));
-    root.add(mesh(new THREE.BoxGeometry(2.1, 0.75, 1.75), mat("#2a3550", { roughness: 0.15, metalness: 0.3 }), -0.25, 1.62, 0));
+    const glass = new THREE.MeshStandardMaterial({ color: "#9fc4e8", roughness: 0.05, metalness: 0.2, transparent: true, opacity: 0.32, depthWrite: false });
+    root.add(mesh(new THREE.BoxGeometry(2.1, 0.75, 1.75), glass, -0.25, 1.62, 0, false));
+    root.add(mesh(new THREE.BoxGeometry(2.14, 0.08, 1.79), mat(v.color), -0.25, 2.0, 0)); // the roof
+    driver = makePerson(v.id * 104729 + 17, v.kind === "lifeguard" ? "lifeguard" : "driver"); driver.root.scale.setScalar(0.62); driver.root.position.set(-0.15, 0.55, -0.4); root.add(driver.root);
     if (v.kind === "lifeguard") {
       root.add(mesh(new THREE.BoxGeometry(4.02, 0.22, 1.97), mat("#ffffff"), 0, 0.95, 0));
       lights = [new THREE.MeshStandardMaterial({ color: "#ff2a2a", emissive: "#ff2a2a" }), new THREE.MeshStandardMaterial({ color: "#ffffff", emissive: "#ffffff" })];
-      root.add(mesh(new THREE.BoxGeometry(0.5, 0.22, 0.6), lights[0], -0.25, 2.1, -0.4), mesh(new THREE.BoxGeometry(0.5, 0.22, 0.6), lights[1], -0.25, 2.1, 0.4));
+      root.add(mesh(new THREE.BoxGeometry(0.5, 0.22, 0.6), lights[0], -0.25, 2.15, -0.4), mesh(new THREE.BoxGeometry(0.5, 0.22, 0.6), lights[1], -0.25, 2.15, 0.4));
     }
     for (const [x, z] of [[1.35, -1.0], [1.35, 1.0], [-1.35, -1.0], [-1.35, 1.0]]) wheel(x, z);
   }
-  return { root, wheels, lights };
-}
-
-function makePed(shirt: string) {
-  const root = new THREE.Group(), skin = mat(["#f1c7a5", "#c98e62", "#8d5a3b", "#f6d7c3"][Math.floor(Math.random() * 4)]);
-  root.add(mesh(new THREE.CapsuleGeometry(0.28, 0.55, 4, 8), mat(shirt), 0, 1.2, 0));
-  root.add(mesh(new THREE.SphereGeometry(0.24, 12, 10), skin, 0, 1.82, 0));
-  if (Math.random() < 0.5) { const hat = mesh(new THREE.CylinderGeometry(0.42, 0.42, 0.06, 14), mat("#f3e2a6"), 0, 2.02, 0); root.add(hat); }
-  const legs = [-1, 1].map(s => { const p = new THREE.Group(); p.position.set(0, 0.75, s * 0.13); p.add(mesh(new THREE.CapsuleGeometry(0.1, 0.5, 3, 6), skin, 0, -0.35, 0)); root.add(p); return p; });
-  return { root, legs };
+  return { root, wheels, lights, driver };
 }

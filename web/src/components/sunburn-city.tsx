@@ -50,7 +50,7 @@ export function SunburnCity() {
         for (const e of g.events.splice(0)) cityAudio.play(e);
       }
       cityAudio.frame(running && !!g.car, g.car ? speedOf(g.car) : 0);
-      scene.update(running ? dt : 0);
+      scene.update(running ? dt : 0, dt, !startedRef.current);
       if (mini.current) drawMinimap(mini.current, mapImg, g);
       if (now - hudAt > 100) {
         hudAt = now;
@@ -150,11 +150,11 @@ export function SunburnCity() {
         <canvas ref={mini} width={180} height={180} className="pointer-events-none absolute bottom-4 right-4 h-[120px] w-[120px] rounded-full border-4 border-black/40 shadow-lg sm:h-[160px] sm:w-[160px]" />
 
         {!started && !error && (
-          <div className="absolute inset-0 grid place-items-center bg-gradient-to-b from-black/20 via-black/45 to-black/70 p-4">
-            <div className="max-w-lg text-center text-white">
+          <div className="absolute inset-0 flex items-end bg-gradient-to-t from-black/75 via-black/25 to-transparent p-5 sm:items-center sm:bg-gradient-to-r sm:from-black/70 sm:via-black/30 sm:p-12">
+            <div className="max-w-md text-left text-white">
               <div className="font-display text-[54px] font-black uppercase leading-none tracking-tight drop-shadow-[0_5px_0_rgba(0,0,0,.4)] sm:text-[80px]">Sunburn<br /><span className="text-amber-300">City</span></div>
-              <p className="mx-auto mt-3 max-w-md text-[16px] font-semibold text-white/90">A Yeti on vacation. Borrow cars, jump the beach ramps, pull off comedy capers and keep the lifeguards off your tail.</p>
-              <div className="mx-auto mt-4 grid max-w-md grid-cols-2 gap-x-5 gap-y-1 text-left text-[13px] text-white/85">
+              <p className="mt-3 max-w-md text-[16px] font-semibold text-white/90">A Yeti on vacation. Borrow cars, jump the beach ramps, pull off comedy capers and keep the lifeguards off your tail.</p>
+              <div className="mt-4 grid max-w-md grid-cols-2 gap-x-5 gap-y-1 text-left text-[13px] text-white/85">
                 <span><b>W A S D / arrows</b> drive or walk</span><span><b>Space</b> handbrake drift</span>
                 <span><b>E</b> get in or out, start a caper</span><span><b>H</b> horn · <b>R</b> radio · <b>P</b> pause</span>
               </div>

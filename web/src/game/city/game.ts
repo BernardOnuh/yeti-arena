@@ -43,8 +43,9 @@ const junction = (v: number) => Math.max(0, Math.min(N, Math.round((v - roadC(0)
 
 export function newGame(): Game {
   const world = makeWorld();
+  // the Yeti starts on the boardwalk, with the ocean behind it
   const g: Game = {
-    world, time: 0, yeti: { x: world.places.cave.x, z: world.places.cave.z + 4, h: 0, walk: 0 }, car: null, vehicles: [], peds: [],
+    world, time: 0, yeti: { x: CITY + 9, z: 52, h: Math.PI, walk: 0 }, car: null, vehicles: [], peds: [],
     coins: 0, done: {}, heat: 0, heatCool: 0, bust: 0, active: null, toast: null, prompt: null, shake: 0, events: [], nextId: 1,
     card: { title: "Sunburn City", sub: "A Yeti on vacation. What could go wrong?", tone: "mission", until: 3.2 },
   };
