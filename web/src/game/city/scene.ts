@@ -5,7 +5,8 @@ import { EffectComposer } from "three/examples/jsm/postprocessing/EffectComposer
 import { RenderPass } from "three/examples/jsm/postprocessing/RenderPass.js";
 import { UnrealBloomPass } from "three/examples/jsm/postprocessing/UnrealBloomPass.js";
 import { OutputPass } from "three/examples/jsm/postprocessing/OutputPass.js";
-import { makePerson, makeYeti } from "./characters";
+import { makePerson } from "./characters";
+import { makeYeti } from "../yeti-model";
 import { MISSIONS, objectives, speedOf, type Game, type Ped, type Vehicle } from "./game";
 import { BLOCK, CITY, N, PITCH, ROAD, SAND_END, roadC } from "./world";
 
