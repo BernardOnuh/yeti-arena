@@ -79,6 +79,11 @@ Then restart the web server. Until the IDs are set, the game works as before and
 - No paid entry, wagers or financial rewards. Badges are cosmetic.
 - Testnet first.
 
+## Credits
+
+- Sky lighting: "Spruit Sunrise" HDRI by Greg Zaal, [Poly Haven](https://polyhaven.com/a/spruit_sunrise) (CC0).
+- Ambient occlusion: [N8AO](https://github.com/N8python/n8ao) (MIT).
+
 ## Licence
 
 MIT
