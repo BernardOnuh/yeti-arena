@@ -491,12 +491,13 @@ try:
     for d in prefs.devices: d.use = d.type != "CPU"
     cy.device = "GPU"
 except Exception as e: print("GPU unavailable:", e)
-cy.samples = 512 if FINAL else 64; cy.use_denoising = True
+cy.samples = 192 if FINAL else 64; cy.use_denoising = True
+cy.use_adaptive_sampling = True; cy.adaptive_threshold = 0.02
 try: cy.denoiser = "OPENIMAGEDENOISE"
 except Exception: pass
 cy.max_bounces = 10; cy.diffuse_bounces = 3; cy.glossy_bounces = 4; cy.transmission_bounces = 8; cy.volume_bounces = 1; cy.transparent_max_bounces = 32
 cy.caustics_reflective = False; cy.caustics_refractive = False
-try: scene.cycles_curves.shape = "THICK" if FINAL else "RIBBONS"; scene.cycles_curves.subdivisions = 3
+try: scene.cycles_curves.shape = "RIBBONS"; scene.cycles_curves.subdivisions = 3   # round tubes were ~10x slower for little visible gain
 except Exception: pass
 try: scene.view_settings.view_transform = "AgX"; scene.view_settings.look = "AgX - Medium High Contrast"
 except Exception: pass
