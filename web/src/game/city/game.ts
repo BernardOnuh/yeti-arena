@@ -30,6 +30,7 @@ export interface Game {
   heat: number; heatCool: number; bust: number;
   active: Active | null; toast: { text: string; until: number } | null; card: Card | null; prompt: string | null;
   shake: number; events: string[]; nextId: number;
+  weather: "snow" | "sun";
 }
 
 const DIRS = [[1, 0], [0, 1], [-1, 0], [0, -1]] as const; // E S W N
@@ -46,7 +47,7 @@ export function newGame(): Game {
   // the Yeti starts on the boardwalk, with the ocean behind it
   const g: Game = {
     world, time: 0, yeti: { x: CITY + 9, z: 52, h: Math.PI, walk: 0 }, car: null, vehicles: [], peds: [],
-    coins: 0, done: {}, heat: 0, heatCool: 0, bust: 0, active: null, toast: null, prompt: null, shake: 0, events: [], nextId: 1,
+    coins: 0, done: {}, heat: 0, heatCool: 0, bust: 0, active: null, toast: null, prompt: null, shake: 0, events: [], nextId: 1, weather: "snow",
     card: { title: "Sunburn City", sub: "A Yeti on vacation. What could go wrong?", tone: "mission", until: 3.2 },
   };
   for (const p of world.parked) g.vehicles.push(vehicle(g, p.kind, "parked", p.x, p.z, p.h, p.kind === "truck" ? "#fff0f6" : "#ff7a59"));
@@ -74,16 +75,16 @@ const me = (g: Game) => (g.car ? { x: g.car.x, z: g.car.z } : g.yeti);
 function drive(g: Game, v: Vehicle, throttle: number, steer: number, brake: boolean, dt: number) {
   const s = STATS[v.kind], c = Math.cos(v.h), sn = Math.sin(v.h);
   const fwd = v.vx * c + v.vz * sn, lat = -v.vx * sn + v.vz * c;
-  const sand = onSand(v.x), water = inWater(v.x), airborne = v.air > 0;
+  const sand = onSand(v.x), water = inWater(v.x), airborne = v.air > 0, icy = g.weather === "snow";
   let nf = fwd;
   if (!airborne) {
-    nf += throttle * (throttle > 0 ? s.accel : fwd > 1 ? 34 : s.accel * 0.6) * dt;
+    nf += throttle * (throttle > 0 ? s.accel * (icy ? 0.8 : 1) : fwd > 1 ? (icy ? 20 : 34) : s.accel * 0.6) * dt;
     nf *= 1 - (water ? 2.4 : sand ? 0.9 : 0.3) * dt;
     if (brake) nf *= 1 - 1.4 * dt;
     nf = Math.max(-11, Math.min(s.max * (water ? 0.35 : sand ? 0.8 : 1), nf));
     v.h += steer * 2.1 * Math.min(1, Math.abs(nf) / 7) * Math.sign(nf || 1) * dt;
   }
-  const nl = airborne ? lat : lat * Math.max(0, 1 - (brake ? 1.3 : s.grip) * dt);
+  const nl = airborne ? lat : lat * Math.max(0, 1 - (brake ? 1.3 : s.grip * (icy ? 0.45 : 1)) * dt);   // snow: the tyres slide
   const c2 = Math.cos(v.h), s2 = Math.sin(v.h);
   v.vx = nf * c2 - nl * s2; v.vz = nf * s2 + nl * c2;
   const px = v.x, pz = v.z;

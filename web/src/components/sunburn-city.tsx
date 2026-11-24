@@ -2,7 +2,7 @@
 // Sunburn City: a 3D open-world comedy caper. Fixed 60 Hz simulation, three.js scene, HUD with cinematic title cards,
 // a lifeguard alert meter, a minimap, keyboard and touch controls, and coins saved in this browser.
 import { useEffect, useRef, useState } from "react";
-import { Coins, Navigation, Pause, Play, Radio, Volume2, VolumeX } from "lucide-react";
+import { Coins, Navigation, Pause, Play, Radio, Snowflake, Sun, Volume2, VolumeX } from "lucide-react";
 import { MISSIONS, newGame, objectives, speedOf, step, type Card, type Game, type Keys } from "@/game/city/game";
 import { createScene } from "@/game/city/scene";
 import { cityAudio } from "@/game/city/audio";
@@ -25,13 +25,16 @@ export function SunburnCity() {
   const keys = useRef<Keys>({ up: false, down: false, left: false, right: false, brake: false, action: false, horn: false });
   const [started, setStarted] = useState(false), [paused, setPaused] = useState(false), [muted, setMuted] = useState(false), [radio, setRadio] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [snowing, setSnowing] = useState(true);
+  const gameRef = useRef<Game | null>(null);
   const [hud, setHud] = useState<Hud>({ coins: 0, heat: 0, prompt: null, toast: null, card: null, driving: false, speed: 0, done: 0, caper: null, arrow: null });
   const startedRef = useRef(false); startedRef.current = started;
   const pausedRef = useRef(false); pausedRef.current = paused;
 
   useEffect(() => {
     const g = newGame();
-    try { const s = JSON.parse(localStorage.getItem(SAVE) || "null"); if (s) { g.coins = s.coins || 0; g.done = s.done || {}; } } catch { /* no save yet */ }
+    try { const s = JSON.parse(localStorage.getItem(SAVE) || "null"); if (s) { g.coins = s.coins || 0; g.done = s.done || {}; if (s.weather === "sun") g.weather = "sun"; } } catch { /* no save yet */ }
+    gameRef.current = g; setSnowing(g.weather === "snow");
     if (process.env.NODE_ENV !== "production") (window as unknown as { __city: Game }).__city = g; // for the browser test
     const cv = canvas.current!;
     let scene: ReturnType<typeof createScene>;
@@ -65,7 +68,7 @@ export function SunburnCity() {
           arrow: near ? { angle: Math.atan2(near.z - p.z, near.x - p.x) - heading, dist: Math.round(Math.hypot(near.x - p.x, near.z - p.z)) } : null,
         });
       }
-      if (now - saveAt > 2000) { saveAt = now; try { localStorage.setItem(SAVE, JSON.stringify({ coins: g.coins, done: g.done })); } catch { /* private mode */ } }
+      if (now - saveAt > 2000) { saveAt = now; try { localStorage.setItem(SAVE, JSON.stringify({ coins: g.coins, done: g.done, weather: g.weather })); } catch { /* private mode */ } }
       raf = requestAnimationFrame(frame);
     };
     raf = requestAnimationFrame(frame);
@@ -76,6 +79,7 @@ export function SunburnCity() {
     const down = (e: KeyboardEvent) => {
       if (e.code === "KeyP" || e.code === "Escape") { setPaused(p => !p); return; }
       if (e.code === "KeyR") { cityAudio.radio = !cityAudio.radio; setRadio(cityAudio.radio); return; }
+      if (e.code === "KeyN") { toggleWeather(); return; }
       const k = KEYMAP[e.code]; if (!k) return;
       e.preventDefault();
       if (!startedRef.current) { begin(); return; }
@@ -87,6 +91,7 @@ export function SunburnCity() {
   }, []);
 
   function begin() { cityAudio.unlock(); setStarted(true); }
+  function toggleWeather() { const g = gameRef.current; if (!g) return; g.weather = g.weather === "snow" ? "sun" : "snow"; setSnowing(g.weather === "snow"); }
   const hold = (k: keyof Keys, on: boolean) => { if (k === "action") { if (on) keys.current.action = true; } else keys.current[k] = on; };
   const touch = (k: keyof Keys) => ({
     onPointerDown: (e: React.PointerEvent) => { e.preventDefault(); if (!startedRef.current) begin(); hold(k, true); },
@@ -118,6 +123,7 @@ export function SunburnCity() {
           </div>
           <div className="flex items-center gap-2">
             <div className={`${chip} flex items-center gap-1.5 px-3 py-2 font-display text-[18px] font-bold tabular-nums text-amber-300`}><Coins className="h-4 w-4" />{hud.coins.toLocaleString()}</div>
+            <button className={`${chip} pointer-events-auto grid h-10 w-10 place-items-center text-white`} aria-label={snowing ? "Make it sunny (N)" : "Make it snow (N)"} title={snowing ? "Make it sunny (N)" : "Make it snow (N)"} onClick={toggleWeather}>{snowing ? <Sun className="h-4 w-4" /> : <Snowflake className="h-4 w-4" />}</button>
             <button className={`${chip} pointer-events-auto grid h-10 w-10 place-items-center text-white ${radio ? "" : "opacity-50"}`} aria-label="Radio (R)" title="Radio (R)" onClick={() => { cityAudio.radio = !radio; setRadio(!radio); }}><Radio className="h-4 w-4" /></button>
             <button className={`${chip} pointer-events-auto grid h-10 w-10 place-items-center text-white`} aria-label={muted ? "Unmute" : "Mute"} onClick={() => { cityAudio.setMuted(!muted); setMuted(!muted); }}>{muted ? <VolumeX className="h-4 w-4" /> : <Volume2 className="h-4 w-4" />}</button>
             <button className={`${chip} pointer-events-auto grid h-10 w-10 place-items-center text-white`} aria-label={paused ? "Resume" : "Pause"} onClick={() => setPaused(p => !p)}>{paused ? <Play className="h-4 w-4" /> : <Pause className="h-4 w-4" />}</button>
@@ -156,7 +162,7 @@ export function SunburnCity() {
               <p className="mt-3 max-w-md text-[16px] font-semibold text-white/90">A Yeti on vacation. Borrow cars, jump the beach ramps, pull off comedy capers and keep the lifeguards off your tail.</p>
               <div className="mt-4 grid max-w-md grid-cols-2 gap-x-5 gap-y-1 text-left text-[13px] text-white/85">
                 <span><b>W A S D / arrows</b> drive or walk</span><span><b>Space</b> handbrake drift</span>
-                <span><b>E</b> get in or out, start a caper</span><span><b>H</b> horn · <b>R</b> radio · <b>P</b> pause</span>
+                <span><b>E</b> get in or out, start a caper</span><span><b>H</b> horn · <b>R</b> radio · <b>N</b> snow · <b>P</b> pause</span>
               </div>
               <button className="btn-primary mt-6 px-10 text-[18px]" onClick={begin}>Hit the beach</button>
             </div>

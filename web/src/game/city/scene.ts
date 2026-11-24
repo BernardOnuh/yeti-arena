@@ -12,6 +12,7 @@ import { SMAAPass } from "three/examples/jsm/postprocessing/SMAAPass.js";
 import { RGBELoader } from "three/examples/jsm/loaders/RGBELoader.js";
 import { N8AOPass } from "n8ao";
 import { makePerson } from "./characters";
+import { facadeMaterial, snowfall, snowify, weather } from "./weather";
 import { makeYeti } from "../yeti-model";
 import { MISSIONS, objectives, speedOf, type Game, type Ped, type Vehicle } from "./game";
 import { BLOCK, CITY, N, PITCH, ROAD, SAND_END, roadC } from "./world";
@@ -57,20 +58,21 @@ export function createScene(canvas: HTMLCanvasElement, g: Game) {
   // ---------- sky ----------
   const sky = new THREE.Mesh(new THREE.SphereGeometry(1200, 32, 16), new THREE.ShaderMaterial({
     side: THREE.BackSide, depthWrite: false, fog: false,
-    uniforms: { sun: { value: SUN_DIR } },
+    uniforms: { sun: { value: SUN_DIR }, uSnow: weather.snow },
     vertexShader: "varying vec3 vDir; void main(){ vDir = normalize(position); gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }",
-    fragmentShader: `varying vec3 vDir; uniform vec3 sun;
+    fragmentShader: `varying vec3 vDir; uniform vec3 sun; uniform float uSnow;
       void main(){ float y = max(vDir.y, -0.1);
         vec3 top = vec3(0.20,0.36,0.72), mid = vec3(1.0,0.62,0.45), hor = vec3(1.0,0.84,0.60);
         vec3 c = mix(hor, mid, smoothstep(0.0, 0.12, y)); c = mix(c, top, smoothstep(0.1, 0.65, y));
         float s = max(dot(normalize(vDir), sun), 0.0);
         c += vec3(1.0,0.75,0.45) * pow(s, 10.0) * 0.45 + vec3(1.0,0.95,0.8) * smoothstep(0.9975, 0.999, s);
-        gl_FragColor = vec4(c, 1.0); }`,
+        vec3 overcast = mix(vec3(0.78,0.8,0.86), vec3(0.5,0.56,0.66), smoothstep(0.0, 0.6, y)) + vec3(0.95,0.9,0.85) * pow(s, 6.0) * 0.12;
+        gl_FragColor = vec4(mix(c, overcast, uSnow), 1.0); }`,
   }));
   scene.add(sky);
 
   // ---------- light ----------
-  scene.add(new THREE.HemisphereLight("#ffe3c4", "#c79a6a", 0.55));
+  const hemi = new THREE.HemisphereLight("#ffe3c4", "#c79a6a", 0.55); scene.add(hemi);
   // image-based lighting: a real sky lights the city and is what car paint and window glass reflect
   const pmrem = new THREE.PMREMGenerator(renderer);
   new RGBELoader().load("/env/spruit_sunrise_1k.hdr", hdr => {
@@ -90,7 +92,7 @@ export function createScene(canvas: HTMLCanvasElement, g: Game) {
   composer.addPass(ao);
   const bloom = new UnrealBloomPass(new THREE.Vector2(1, 1), 0.22, 0.5, 0.9); composer.addPass(bloom);
   composer.addPass(new OutputPass());
-  composer.addPass(new ShaderPass(GradeShader));
+  const grade = new ShaderPass(GradeShader); composer.addPass(grade);
   const smaa = new SMAAPass(1, 1); composer.addPass(smaa);
 
   // ---------- ground: grass, asphalt, sidewalks, sand, ocean ----------
@@ -123,12 +125,13 @@ export function createScene(canvas: HTMLCanvasElement, g: Game) {
     if (Math.abs(((a - roadC(0)) % PITCH + PITCH) % PITCH) < ROAD / 2 + 1 || Math.abs(((a - roadC(0)) % PITCH + PITCH) % PITCH - PITCH) < ROAD / 2 + 1) continue;
     dashes.push(new THREE.Matrix4().makeTranslation(a, 0.02, roadC(i)), new THREE.Matrix4().makeRotationY(Math.PI / 2).setPosition(roadC(i), 0.02, a));
   }
-  const dashMesh = new THREE.InstancedMesh(new THREE.BoxGeometry(3, 0.02, 0.28), new THREE.MeshBasicMaterial({ color: "#ffe9a8" }), dashes.length);
+  const dashMat = new THREE.MeshBasicMaterial({ color: "#ffe9a8" });
+  const dashMesh = new THREE.InstancedMesh(new THREE.BoxGeometry(3, 0.02, 0.28), dashMat, dashes.length);
   dashes.forEach((m, i) => dashMesh.setMatrixAt(i, m)); scene.add(dashMesh);
 
   const ocean = new THREE.Mesh(new THREE.PlaneGeometry(1600, 2400, 1, 1), new THREE.ShaderMaterial({
     fog: true, transparent: false,
-    uniforms: { ...THREE.UniformsUtils.clone(THREE.UniformsLib.fog), time: { value: 0 }, shore: { value: SAND_END } },
+    uniforms: { ...THREE.UniformsUtils.clone(THREE.UniformsLib.fog), time: { value: 0 }, shore: { value: SAND_END }, uSnow: weather.snow },
     vertexShader: /* glsl */ `
       varying vec3 vW;
       #include <fog_pars_vertex>
@@ -138,7 +141,7 @@ export function createScene(canvas: HTMLCanvasElement, g: Game) {
         #include <fog_vertex>
       }`,
     fragmentShader: /* glsl */ `
-      varying vec3 vW; uniform float time; uniform float shore;
+      varying vec3 vW; uniform float time; uniform float shore; uniform float uSnow;
       #include <fog_pars_fragment>
       void main() {
         float d = vW.x - shore;
@@ -147,6 +150,7 @@ export function createScene(canvas: HTMLCanvasElement, g: Game) {
         c += vec3(1.0, 0.85, 0.6) * smoothstep(1.05, 1.4, w) * 0.35;
         float foam = smoothstep(4.0, 0.0, d + sin(vW.z * 0.15 + time * 1.2) * 1.5);
         c = mix(c, vec3(0.97, 0.98, 1.0), foam * 0.85);
+        c = mix(c, c * vec3(0.5, 0.58, 0.66) + vec3(0.06, 0.08, 0.1), uSnow);
         gl_FragColor = vec4(c, 1.0);
         #include <tonemapping_fragment>
         #include <colorspace_fragment>
@@ -156,20 +160,12 @@ export function createScene(canvas: HTMLCanvasElement, g: Game) {
   ocean.rotation.x = -Math.PI / 2; ocean.position.set(SAND_END - 6 + 800, 0.03, CITY / 2); scene.add(ocean);
 
   // ---------- buildings ----------
-  const windows = canvasTexture(128, 128, c => {
-    c.fillStyle = "#ffffff"; c.fillRect(0, 0, 128, 128);
-    for (const [x, y] of [[14, 12], [76, 12], [14, 74], [76, 74]]) {
-      c.fillStyle = "rgba(60,95,135,.42)"; c.fillRect(x, y, 38, 44);
-      c.fillStyle = "rgba(255,255,255,.55)"; c.fillRect(x + 4, y + 4, 10, 18);
-      c.fillStyle = "rgba(0,0,0,.12)"; c.fillRect(x - 3, y + 44, 44, 5);
-    }
-  });
-  windows.wrapS = windows.wrapT = THREE.RepeatWrapping;
-  const windowGloss = canvasTexture(128, 128, c => {       // roughness: matte walls (light), glossy panes (dark)
-    c.fillStyle = "#d8d8d8"; c.fillRect(0, 0, 128, 128); c.fillStyle = "#111111";
-    for (const [x, y] of [[14, 12], [76, 12], [14, 74], [76, 74]]) c.fillRect(x, y, 38, 44);
-  });
-  windowGloss.colorSpace = THREE.NoColorSpace; windowGloss.wrapS = windowGloss.wrapT = THREE.RepeatWrapping;
+  const texLoader = new THREE.TextureLoader();
+  const plaster = (file: string, srgb: boolean) => {
+    const t = texLoader.load(`/tex/${file}`); t.wrapS = t.wrapT = THREE.RepeatWrapping; t.repeat.set(2.5, 2.5); t.anisotropy = 8;
+    t.colorSpace = srgb ? THREE.SRGBColorSpace : THREE.NoColorSpace; return t;
+  };
+  const facadeTex = { diff: plaster("plaster_diff.jpg", true), nor: plaster("plaster_nor_gl.jpg", false), rough: plaster("plaster_rough.jpg", false) };
   for (const b of g.world.buildings) {
     const w = b.x1 - b.x0, d = b.z1 - b.z0;
     const geo = new THREE.BoxGeometry(w, b.h, d), uv = geo.attributes.uv as THREE.BufferAttribute;
@@ -178,7 +174,7 @@ export function createScene(canvas: HTMLCanvasElement, g: Game) {
       const i = f * 4 + v, [fu, fv] = faces[f];
       uv.setXY(i, fu ? uv.getX(i) * (fu / 5.5) : 0.02, fv ? uv.getY(i) * (fv / 5.5) : 0.98);
     }
-    const body = mesh(geo, mat(b.color, { map: windows, roughnessMap: windowGloss, roughness: 1, metalness: 0.05, envMapIntensity: 1.4 }), (b.x0 + b.x1) / 2, b.h / 2, (b.z0 + b.z1) / 2);
+    const body = mesh(geo, facadeMaterial(b.color, facadeTex), (b.x0 + b.x1) / 2, b.h / 2, (b.z0 + b.z1) / 2);
     scene.add(body);
     scene.add(mesh(new THREE.BoxGeometry(w + 0.5, 0.5, d + 0.5), mat(b.roof), body.position.x, b.h + 0.25, body.position.z));
     if (w > 8 && d > 8 && !b.sign) scene.add(mesh(new THREE.BoxGeometry(2.4, 1.6, 2.4), mat("#d9d4c8"), b.x0 + 3, b.h + 1.3, b.z0 + 3));
@@ -254,9 +250,25 @@ export function createScene(canvas: HTMLCanvasElement, g: Game) {
   let camYaw = g.yeti.h, fov = 62;
   const camPos = new THREE.Vector3(g.yeti.x - 8, 5, g.yeti.z), look = new THREE.Vector3(g.yeti.x, 1, g.yeti.z);
 
+  snowify(scene);
+  const flakes = snowfall(); scene.add(flakes.points);
+  const SUNNY = { fog: new THREE.Color("#ffd2a6"), sun: new THREE.Color("#ffc68f"), sky: new THREE.Color("#ffe3c4"), dash: new THREE.Color("#ffe9a8") };
+  const SNOWY = { fog: new THREE.Color("#c3cddc"), sun: new THREE.Color("#e4ecff"), sky: new THREE.Color("#dfe8f5"), dash: new THREE.Color("#d9dee6") };
+  let wt = g.weather === "snow" ? 1 : 0;
+  if (process.env.NODE_ENV !== "production") (window as unknown as { __weather: typeof weather }).__weather = weather; // for the browser test
+  const mixN = (a: number, b: number) => a + (b - a) * wt;
+
   function update(dt: number, real: number, title = false) {
     const t = g.time; anim += real;
     (ocean.material as THREE.ShaderMaterial).uniforms.time.value = t;
+    // weather: the storm rolls in (or clears) over a few seconds, and snow settles as it does
+    wt += ((g.weather === "snow" ? 1 : 0) - wt) * (1 - Math.exp(-real * 0.6));
+    weather.snow.value = wt; weather.time.value += real; weather.lit.value = mixN(0.12, 0.6); weather.glow.value = mixN(0.5, 1.6);
+    const fog = scene.fog as THREE.Fog; fog.color.lerpColors(SUNNY.fog, SNOWY.fog, wt); fog.near = mixN(110, 28); fog.far = mixN(520, 230);
+    sun.intensity = mixN(3.0, 1.0); sun.color.lerpColors(SUNNY.sun, SNOWY.sun, wt);
+    hemi.intensity = mixN(0.55, 1.3); hemi.color.lerpColors(SUNNY.sky, SNOWY.sky, wt);
+    scene.environmentIntensity = mixN(0.85, 0.55); bloom.strength = mixN(0.22, 0.36);
+    grade.uniforms.saturation.value = mixN(1.1, 0.92); dashMat.color.lerpColors(SUNNY.dash, SNOWY.dash, wt);
     jet.scale.y = 1 + Math.sin(t * 6) * 0.08;
 
     // vehicles
@@ -264,7 +276,7 @@ export function createScene(canvas: HTMLCanvasElement, g: Game) {
     for (const v of g.vehicles) {
       alive.add(v.id);
       let m = cars.get(v.id);
-      if (!m) { m = makeVehicle(v); cars.set(v.id, m); scene.add(m.root); }
+      if (!m) { m = makeVehicle(v); snowify(m.root); cars.set(v.id, m); scene.add(m.root); }
       m.root.position.set(v.x, v.y, v.z); m.root.rotation.set(0, -v.h, 0);
       if (v.air > 0) m.root.rotation.z = Math.max(-0.35, Math.min(0.35, v.vy * 0.04));
       for (const wh of m.wheels) wh.rotation.z = -v.wheel;
@@ -335,6 +347,7 @@ export function createScene(canvas: HTMLCanvasElement, g: Game) {
     fov += ((c ? 62 + Math.min(18, spd * 0.55) : 60) - fov) * (1 - Math.exp(-dt * 3));
     camera.fov = fov; camera.updateProjectionMatrix();
     sky.position.copy(camera.position);
+    flakes.follow(camera, renderer.domElement.height);
 
     // the sun's shadow box follows the player
     sun.position.set(px + SUN_DIR.x * 150, SUN_DIR.y * 150, pz + SUN_DIR.z * 150); sun.target.position.set(px, 0, pz);

@@ -82,6 +82,7 @@ Then restart the web server. Until the IDs are set, the game works as before and
 ## Credits
 
 - Sky lighting: "Spruit Sunrise" HDRI from [Poly Haven](https://polyhaven.com/a/spruit_sunrise) (CC0).
+- Wall texture: "Painted Plaster Wall" from [Poly Haven](https://polyhaven.com/a/painted_plaster_wall) (CC0).
 - Ambient occlusion: [N8AO](https://github.com/N8python/n8ao) (MIT).
 
 ## Licence
