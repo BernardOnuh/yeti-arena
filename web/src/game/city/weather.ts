@@ -140,5 +140,10 @@ export function snowfall(count = 14000) {
       void main() { float d = length(gl_PointCoord - 0.5); gl_FragColor = vec4(vec3(1.0), vFade * smoothstep(0.5, 0.15, d) * 0.9); }`,
   });
   const points = new THREE.Points(geo, mat); points.frustumCulled = false;
-  return { points, follow(camera: THREE.Camera, pixelHeight: number) { cam.value.copy(camera.position); mat.uniforms.uScale.value = pixelHeight / 900; } };
+  return {
+    points,
+    follow(camera: THREE.Camera, pixelHeight: number) { cam.value.copy(camera.position); mat.uniforms.uScale.value = pixelHeight / 900; },
+    /** How many flakes to draw (quality setting). */
+    setCount(n: number) { geo.setDrawRange(0, Math.min(count, n)); },
+  };
 }

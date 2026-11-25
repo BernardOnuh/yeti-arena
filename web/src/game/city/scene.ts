@@ -14,7 +14,7 @@ import { N8AOPass } from "n8ao";
 import { makePerson } from "./characters";
 import { facadeMaterial, snowfall, snowify, weather } from "./weather";
 import { buildProps } from "./props";
-import { loadCar, type CarTemplate } from "./car-model";
+import { loadCar, setCarDetail, type CarTemplate } from "./car-model";
 import { makeYeti } from "../yeti-model";
 import { MISSIONS, objectives, speedOf, type Game, type Ped, type Vehicle } from "./game";
 import { BLOCK, CITY, N, PITCH, ROAD, SAND_END, roadC } from "./world";
@@ -48,9 +48,19 @@ function mesh(geo: THREE.BufferGeometry, m: THREE.Material, x = 0, y = 0, z = 0,
   const o = new THREE.Mesh(geo, m); o.position.set(x, y, z); o.castShadow = shadow; o.receiveShadow = true; return o;
 }
 
+// Quality presets. "auto" starts at high on a desktop and medium on a phone, then steps down (and scales resolution)
+// to hold the frame rate; see the component.
+export type Quality = "low" | "medium" | "high";
+export const QUALITY: Record<Quality, { ratio: number; shadow: number; ao: "off" | "Low" | "Medium"; bloom: boolean; smaa: boolean; cars: number; flakes: number }> = {
+  low: { ratio: 0.9, shadow: 1024, ao: "off", bloom: false, smaa: false, cars: 0, flakes: 4000 },
+  medium: { ratio: 1.25, shadow: 2048, ao: "Low", bloom: true, smaa: false, cars: 4, flakes: 9000 },
+  high: { ratio: 1.75, shadow: 4096, ao: "Medium", bloom: true, smaa: true, cars: 8, flakes: 14000 },
+};
+
 export function createScene(canvas: HTMLCanvasElement, g: Game) {
   const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: "high-performance" });
   renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.75));
+  renderer.info.autoReset = false; // count the whole frame (every post-processing pass), not just the last pass
   renderer.shadowMap.enabled = true; renderer.shadowMap.type = THREE.PCFSoftShadowMap;
   renderer.toneMapping = THREE.ACESFilmicToneMapping; renderer.toneMappingExposure = 1.05;
   const scene = new THREE.Scene();
@@ -88,6 +98,7 @@ export function createScene(canvas: HTMLCanvasElement, g: Game) {
   scene.add(sun, sun.target);
   const rim = new THREE.DirectionalLight("#9fc8ff", 1.1); rim.position.set(-80, 50, 90); scene.add(rim); // cool back light so characters pop
   const composer = new EffectComposer(renderer, new THREE.WebGLRenderTarget(1, 1, { samples: 4, type: THREE.HalfFloatType }));
+  const plainPass = new RenderPass(scene, camera); plainPass.enabled = false; composer.addPass(plainPass);
   const ao = new N8AOPass(scene, camera, 1, 1);
   Object.assign(ao.configuration, { aoRadius: 2.5, distanceFalloff: 1.2, intensity: 2.2, color: new THREE.Color("#1a2238"), gammaCorrection: false }); // OutputPass does the colour conversion
   ao.setQualityMode("Medium");
@@ -255,7 +266,7 @@ export function createScene(canvas: HTMLCanvasElement, g: Game) {
   const street = buildProps(g.world.props, scene);
   let lanternsSnowed = false;
   let carTpl: CarTemplate | null = null; loadCar(t => (carTpl = t));
-  const HI_CARS = 8, HI_RANGE = 75;
+  let HI_CARS = 8; const HI_RANGE = 75;
   snowify(scene);
   const flakes = snowfall(); scene.add(flakes.points);
   const SUNNY = { fog: new THREE.Color("#ffd2a6"), sun: new THREE.Color("#ffc68f"), sky: new THREE.Color("#ffe3c4"), dash: new THREE.Color("#ffe9a8") };
@@ -290,14 +301,17 @@ export function createScene(canvas: HTMLCanvasElement, g: Game) {
       if (m.lights) { const on = Math.floor(t * 8) % 2 === 0; m.lights[0].emissiveIntensity = on ? 2.2 : 0.1; m.lights[1].emissiveIntensity = on ? 0.1 : 2.2; }
     }
     for (const [id, m] of cars) if (!alive.has(id)) { scene.remove(m.root); cars.delete(id); }
-    // detailed cars for the nearest few, simple ones beyond
+    // every traffic car is the detailed model (no placeholder boxes): the nearest few in full, the rest without their
+    // unseen interiors; until the model has loaded, cars stay hidden rather than showing a stand-in
     const near: { m: ReturnType<typeof makeVehicle>; d: number }[] = [];
     for (const v of g.vehicles) {
       const m = cars.get(v.id)!; if (v.kind !== "car") continue;
       if (carTpl && !m.hi) { m.hi = carTpl.make(v.color); snowify(m.hi); m.root.add(m.hi); }
+      m.lo.visible = false; if (m.driver) m.driver.root.visible = false;
+      m.root.visible = !!m.hi;
       if (m.hi) near.push({ m, d: camera.position.distanceTo(m.root.position) });
     }
-    near.sort((a, b) => a.d - b.d).forEach(({ m, d }, i) => { const hi = i < HI_CARS && d < HI_RANGE; m.hi!.visible = hi; m.lo.visible = !hi; if (m.driver) m.driver.root.visible = !hi && m.driver.root.visible; });  // the detailed car's tinted glass hides its cabin
+    near.sort((a, b) => a.d - b.d).forEach(({ m, d }, i) => setCarDetail(m.hi!, i < HI_CARS && d < HI_RANGE));
     street.update(t, wt);
     if (street.loaded.lanterns && !lanternsSnowed) { snowify(street.group); lanternsSnowed = true; }
 
@@ -367,12 +381,33 @@ export function createScene(canvas: HTMLCanvasElement, g: Game) {
 
     // the sun's shadow box follows the player
     sun.position.set(px + SUN_DIR.x * 150, SUN_DIR.y * 150, pz + SUN_DIR.z * 150); sun.target.position.set(px, 0, pz);
-    composer.render();
+    renderer.info.reset(); composer.render();
+  }
+
+  let quality: Quality = "high", resScale = 1, size = { w: 1, h: 1 };
+  function applySize() {
+    const q = QUALITY[quality], ratio = Math.min(window.devicePixelRatio || 1, q.ratio) * resScale;
+    renderer.setPixelRatio(ratio); renderer.setSize(size.w, size.h, false);
+    composer.setPixelRatio(ratio); composer.setSize(size.w, size.h); bloom.resolution.set(size.w, size.h); ao.setSize(size.w * ratio, size.h * ratio);
+    camera.aspect = size.w / size.h; camera.updateProjectionMatrix();
+  }
+  function setQuality(q: Quality) {
+    quality = q; const c = QUALITY[q];
+    if (sun.shadow.mapSize.x !== c.shadow) { sun.shadow.mapSize.set(c.shadow, c.shadow); sun.shadow.map?.dispose(); sun.shadow.map = null; }
+    ao.enabled = c.ao !== "off"; plainPass.enabled = c.ao === "off"; if (c.ao !== "off") ao.setQualityMode(c.ao);
+    bloom.enabled = c.bloom; smaa.enabled = c.smaa; HI_CARS = c.cars; flakes.setCount(c.flakes);
+    applySize();
   }
 
   return {
-    update,
-    resize(w: number, h: number) { renderer.setSize(w, h, false); composer.setPixelRatio(renderer.getPixelRatio()); composer.setSize(w, h); bloom.resolution.set(w, h); ao.setSize(w, h); camera.aspect = w / h; camera.updateProjectionMatrix(); },
+    update, setQuality,
+    /** Fine-grained resolution scaling (0.5..1) on top of the preset, for holding the frame rate. */
+    setResolutionScale(s: number) { const n = Math.max(0.5, Math.min(1, s)); if (Math.abs(n - resScale) > 0.01) { resScale = n; applySize(); } },
+    /** Draw calls and triangles in the last frame, for the performance overlay. */
+    stats() { const r = renderer.info.render; return { calls: r.calls, triangles: r.triangles, ratio: +renderer.getPixelRatio().toFixed(2) }; },
+    /** The GPU the browser is drawing with, when the browser shares it. */
+    gpu() { const gl = renderer.getContext(), ext = gl.getExtension("WEBGL_debug_renderer_info"); return ext ? String(gl.getParameter(ext.UNMASKED_RENDERER_WEBGL)) : String(gl.getParameter(gl.RENDERER)); },
+    resize(w: number, h: number) { size = { w, h }; applySize(); },
     dispose() {
       scene.traverse(o => { const m = o as THREE.Mesh; m.geometry?.dispose(); const mt = m.material as THREE.Material | THREE.Material[] | undefined; if (Array.isArray(mt)) mt.forEach(x => x.dispose()); else mt?.dispose(); });
       composer.dispose(); renderer.dispose();

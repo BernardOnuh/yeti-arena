@@ -2,13 +2,17 @@
 // Sunburn City: a 3D open-world comedy caper. Fixed 60 Hz simulation, three.js scene, HUD with cinematic title cards,
 // a lifeguard alert meter, a minimap, keyboard and touch controls, and coins saved in this browser.
 import { useEffect, useRef, useState } from "react";
-import { Coins, Navigation, Pause, Play, Radio, Snowflake, Sun, Volume2, VolumeX } from "lucide-react";
+import { Coins, Gauge, Navigation, Pause, Play, Radio, Settings, Snowflake, Sun, Volume2, VolumeX } from "lucide-react";
 import { MISSIONS, newGame, objectives, speedOf, step, type Card, type Game, type Keys } from "@/game/city/game";
-import { createScene } from "@/game/city/scene";
+import { createScene, type Quality } from "@/game/city/scene";
 import { cityAudio } from "@/game/city/audio";
 import { BLOCK, BOUNDS, CITY, N, PITCH, ROAD, SAND_END } from "@/game/city/world";
 
 const SAVE = "sunburn-city:v1";
+const SETTINGS = "sunburn-city:settings";
+type QualitySetting = Quality | "auto";
+const LEVELS: Quality[] = ["low", "medium", "high"];
+interface Perf { fps: number; ms: number; level: Quality; scale: number; calls: number; triangles: number; gpu: string }
 const STEP = 1 / 60;
 const KEYMAP: Record<string, keyof Keys> = {
   ArrowUp: "up", KeyW: "up", ArrowDown: "down", KeyS: "down", ArrowLeft: "left", KeyA: "left", ArrowRight: "right", KeyD: "right",
@@ -27,6 +31,11 @@ export function SunburnCity() {
   const [error, setError] = useState<string | null>(null);
   const [snowing, setSnowing] = useState(true);
   const gameRef = useRef<Game | null>(null);
+  const sceneRef = useRef<ReturnType<typeof createScene> | null>(null);
+  const [qualitySetting, setQualitySetting] = useState<QualitySetting>("auto");
+  const qualityRef = useRef<QualitySetting>("auto"); qualityRef.current = qualitySetting;
+  const [showFps, setShowFps] = useState(false), [settingsOpen, setSettingsOpen] = useState(false);
+  const [perf, setPerf] = useState<Perf | null>(null);
   const [hud, setHud] = useState<Hud>({ coins: 0, heat: 0, prompt: null, toast: null, card: null, driving: false, speed: 0, done: 0, caper: null, arrow: null });
   const startedRef = useRef(false); startedRef.current = started;
   const pausedRef = useRef(false); pausedRef.current = paused;
@@ -39,6 +48,17 @@ export function SunburnCity() {
     const cv = canvas.current!;
     let scene: ReturnType<typeof createScene>;
     try { scene = createScene(cv, g); } catch (e) { setError(e instanceof Error ? e.message : "WebGL isn't available"); return; }
+    sceneRef.current = scene;
+    let saved: { quality?: QualitySetting; fps?: boolean } = {};
+    try { saved = JSON.parse(localStorage.getItem(SETTINGS) || "{}"); } catch { /* defaults */ }
+    if (saved.quality) { setQualitySetting(saved.quality); qualityRef.current = saved.quality; }
+    if (saved.fps) setShowFps(true);
+    // auto quality starts high on a desktop and medium on a phone, then steps down to hold the frame rate
+    const phone = matchMedia("(pointer: coarse)").matches || innerWidth < 700;
+    let level: Quality = qualityRef.current === "auto" ? (phone ? "medium" : "high") : qualityRef.current, scale = 1, smooth = 0;
+    scene.setQuality(level);
+    const gpu = scene.gpu();
+    let frames = 0, perfAt = performance.now(), warm = 0;
     const resize = () => { const r = cv.getBoundingClientRect(); scene.resize(r.width, r.height); };
     resize();
     const ro = new ResizeObserver(resize); ro.observe(cv);
@@ -54,6 +74,20 @@ export function SunburnCity() {
       }
       cityAudio.frame(running && !!g.car, g.car ? speedOf(g.car) : 0);
       scene.update(running ? dt : 0, dt, !startedRef.current);
+      frames++;
+      if (now - perfAt >= 1000) {
+        const fps = (frames * 1000) / (now - perfAt); frames = 0; perfAt = now; warm++;
+        const wanted = qualityRef.current;
+        if (wanted !== "auto" && wanted !== level) { level = wanted; scale = 1; scene.setQuality(level); scene.setResolutionScale(1); }
+        if (wanted === "auto" && warm > 3 && !document.hidden) {
+          // under 52 fps: lower the resolution a step, then the preset; well above 58 for a while: raise the resolution back
+          if (fps < 52) { smooth = 0; if (scale > 0.81) { scale -= 0.1; scene.setResolutionScale(scale); } else if (level !== "low") { level = LEVELS[LEVELS.indexOf(level) - 1]; scale = 1; scene.setQuality(level); scene.setResolutionScale(1); } }
+          else if (fps > 58 && scale < 1 && ++smooth >= 5) { smooth = 0; scale = Math.min(1, scale + 0.05); scene.setResolutionScale(scale); }
+        }
+        const st = scene.stats(), p: Perf = { fps: Math.round(fps), ms: +(1000 / Math.max(fps, 1)).toFixed(1), level, scale: +scale.toFixed(2), calls: st.calls, triangles: st.triangles, gpu };
+        setPerf(p);
+        if (process.env.NODE_ENV !== "production") (window as unknown as { __perf: Perf }).__perf = p; // for the browser test
+      }
       if (mini.current) drawMinimap(mini.current, mapImg, g);
       if (now - hudAt > 100) {
         hudAt = now;
@@ -80,6 +114,7 @@ export function SunburnCity() {
       if (e.code === "KeyP" || e.code === "Escape") { setPaused(p => !p); return; }
       if (e.code === "KeyR") { cityAudio.radio = !cityAudio.radio; setRadio(cityAudio.radio); return; }
       if (e.code === "KeyN") { toggleWeather(); return; }
+      if (e.code === "KeyF") { setShowFps(v => { saveSettings({ fps: !v }); return !v; }); return; }
       const k = KEYMAP[e.code]; if (!k) return;
       e.preventDefault();
       if (!startedRef.current) { begin(); return; }
@@ -91,6 +126,10 @@ export function SunburnCity() {
   }, []);
 
   function begin() { cityAudio.unlock(); setStarted(true); }
+  function saveSettings(patch: { quality?: QualitySetting; fps?: boolean }) {
+    try { const cur = JSON.parse(localStorage.getItem(SETTINGS) || "{}"); localStorage.setItem(SETTINGS, JSON.stringify({ ...cur, ...patch })); } catch { /* private mode */ }
+  }
+  function chooseQuality(q: QualitySetting) { setQualitySetting(q); qualityRef.current = q; saveSettings({ quality: q }); }
   function toggleWeather() { const g = gameRef.current; if (!g) return; g.weather = g.weather === "snow" ? "sun" : "snow"; setSnowing(g.weather === "snow"); }
   const hold = (k: keyof Keys, on: boolean) => { if (k === "action") { if (on) keys.current.action = true; } else keys.current[k] = on; };
   const touch = (k: keyof Keys) => ({
@@ -123,12 +162,34 @@ export function SunburnCity() {
           </div>
           <div className="flex items-center gap-2">
             <div className={`${chip} flex items-center gap-1.5 px-3 py-2 font-display text-[18px] font-bold tabular-nums text-amber-300`}><Coins className="h-4 w-4" />{hud.coins.toLocaleString()}</div>
+            <button className={`${chip} pointer-events-auto grid h-10 w-10 place-items-center text-white`} aria-label="Graphics settings" title="Graphics settings" onClick={() => setSettingsOpen(o => !o)}><Settings className="h-4 w-4" /></button>
             <button className={`${chip} pointer-events-auto grid h-10 w-10 place-items-center text-white`} aria-label={snowing ? "Make it sunny (N)" : "Make it snow (N)"} title={snowing ? "Make it sunny (N)" : "Make it snow (N)"} onClick={toggleWeather}>{snowing ? <Sun className="h-4 w-4" /> : <Snowflake className="h-4 w-4" />}</button>
             <button className={`${chip} pointer-events-auto grid h-10 w-10 place-items-center text-white ${radio ? "" : "opacity-50"}`} aria-label="Radio (R)" title="Radio (R)" onClick={() => { cityAudio.radio = !radio; setRadio(!radio); }}><Radio className="h-4 w-4" /></button>
             <button className={`${chip} pointer-events-auto grid h-10 w-10 place-items-center text-white`} aria-label={muted ? "Unmute" : "Mute"} onClick={() => { cityAudio.setMuted(!muted); setMuted(!muted); }}>{muted ? <VolumeX className="h-4 w-4" /> : <Volume2 className="h-4 w-4" />}</button>
             <button className={`${chip} pointer-events-auto grid h-10 w-10 place-items-center text-white`} aria-label={paused ? "Resume" : "Pause"} onClick={() => setPaused(p => !p)}>{paused ? <Play className="h-4 w-4" /> : <Pause className="h-4 w-4" />}</button>
           </div>
         </div>
+
+        {settingsOpen && (
+          <div className={`${chip} absolute right-3 top-16 z-20 w-64 p-3 text-white sm:right-4`}>
+            <div className="mb-2 flex items-center gap-2 text-[13px] font-black uppercase tracking-wider text-white/80"><Gauge className="h-4 w-4" />Graphics</div>
+            <div className="grid grid-cols-4 gap-1">
+              {(["auto", "low", "medium", "high"] as const).map(q => (
+                <button key={q} onClick={() => chooseQuality(q)} className={`rounded-lg px-1 py-1.5 text-[12px] font-bold capitalize ${qualitySetting === q ? "bg-amber-300 text-night" : "bg-white/10 text-white/85 hover:bg-white/20"}`}>{q}</button>
+              ))}
+            </div>
+            <p className="mt-2 text-[11px] leading-snug text-white/65">{qualitySetting === "auto" ? `Auto keeps it smooth: now on ${perf?.level ?? "…"}${perf && perf.scale < 1 ? ` at ${Math.round(perf.scale * 100)}% resolution` : ""}.` : qualitySetting === "high" ? "Ambient occlusion, sharp shadows, 8 detailed cars." : qualitySetting === "medium" ? "Lighter shadows and occlusion, 4 detailed cars." : "No occlusion or bloom, simple cars: for older phones."}</p>
+            <label className="mt-2 flex cursor-pointer items-center gap-2 text-[12px] font-bold"><input type="checkbox" checked={showFps} onChange={e => { setShowFps(e.target.checked); saveSettings({ fps: e.target.checked }); }} />Show FPS (F)</label>
+          </div>
+        )}
+        {showFps && perf && (
+          <div className="pointer-events-none absolute bottom-20 left-4 rounded-xl bg-black/65 px-3 py-2 font-mono text-[11px] leading-[1.45] text-white">
+            <div className={`text-[15px] font-bold ${perf.fps >= 55 ? "text-emerald-300" : perf.fps >= 30 ? "text-amber-300" : "text-rose-300"}`}>{perf.fps} fps <span className="text-[11px] text-white/60">{perf.ms} ms</span></div>
+            <div>{qualitySetting === "auto" ? "auto → " : ""}{perf.level} · res {Math.round(perf.scale * 100)}%</div>
+            <div>{perf.calls} draws · {(perf.triangles / 1000).toFixed(0)}k tris</div>
+            <div className="max-w-[220px] truncate text-white/55">{perf.gpu}</div>
+          </div>
+        )}
 
         {/* objective compass */}
         {hud.arrow && started && (
@@ -162,7 +223,7 @@ export function SunburnCity() {
               <p className="mt-3 max-w-md text-[16px] font-semibold text-white/90">A Yeti on vacation. Borrow cars, jump the beach ramps, pull off comedy capers and keep the lifeguards off your tail.</p>
               <div className="mt-4 grid max-w-md grid-cols-2 gap-x-5 gap-y-1 text-left text-[13px] text-white/85">
                 <span><b>W A S D / arrows</b> drive or walk</span><span><b>Space</b> handbrake drift</span>
-                <span><b>E</b> get in or out, start a caper</span><span><b>H</b> horn · <b>R</b> radio · <b>N</b> snow · <b>P</b> pause</span>
+                <span><b>E</b> get in or out, start a caper</span><span><b>H</b> horn · <b>R</b> radio · <b>N</b> snow · <b>F</b> fps · <b>P</b> pause</span>
               </div>
               <button className="btn-primary mt-6 px-10 text-[18px]" onClick={begin}>Hit the beach</button>
             </div>

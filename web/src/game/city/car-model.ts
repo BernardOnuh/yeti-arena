@@ -17,6 +17,8 @@ function plateTexture() {
 }
 
 export interface CarTemplate { make(color: string): THREE.Group }
+/** Full detail near the camera; far away, the interior and running gear (unseen through tinted glass) are skipped. */
+export function setCarDetail(car: THREE.Group, full: boolean) { for (const c of car.children) if (c.userData.interior) c.visible = full; }
 
 export function loadCar(onReady: (t: CarTemplate) => void) {
   new GLTFLoader().load("/models/CarConcept.glb", gltf => {
@@ -64,7 +66,9 @@ export function loadCar(onReady: (t: CarTemplate) => void) {
     const template = new THREE.Group();
     for (const { mat, geos } of groups.values()) {
       const merged = mergeGeometries(geos, false); if (!merged) continue;
-      const mesh = new THREE.Mesh(merged, mat); mesh.castShadow = mat !== glass; mesh.receiveShadow = true; template.add(mesh);
+      const mesh = new THREE.Mesh(merged, mat); mesh.castShadow = mat !== glass; mesh.receiveShadow = true;
+      mesh.userData.interior = /interior|dashboard|floormat|mechanical|brake|disc|hardware/i.test(mat.name);   // hidden on far-away cars
+      template.add(mesh);
     }
     if (process.env.NODE_ENV !== "production") {   // for the browser test: where the headlights ended up (front = +X)
       const lamps = template.children.filter(o => /headlight/i.test(((o as THREE.Mesh).material as THREE.Material).name));
