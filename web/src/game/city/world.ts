@@ -19,7 +19,7 @@ export interface Props { lamps: Prop[]; signals: (Prop & { axis: 0 | 1 })[]; ben
 
 export interface World {
   buildings: Building[]; palms: Circle[]; solids: Circle[]; ramps: Ramp[]; places: Record<string, Place>;
-  coolers: { x: number; z: number }[]; parked: { x: number; z: number; h: number; kind: "buggy" | "truck" }[]; walkways: { a: [number, number]; b: [number, number] }[];
+  coolers: { x: number; z: number }[]; parked: { x: number; z: number; h: number; kind: "buggy" | "truck" | "taxi" }[]; walkways: { a: [number, number]; b: [number, number] }[];
   props: Props;
 }
 
@@ -69,6 +69,10 @@ export function makeWorld(seed = 11): World {
   // the boardwalk and the beach
   for (let z = 4; z < CITY; z += 13) palms.push({ x: CITY + 3, z, r: 0.5 });
   places.tiki = { id: "tiki", label: "Tiki Shack", x: CITY + 20, z: 22 };
+  // more places for jobs: a taxi stand on the plaza's south sidewalk, a cocoa cart, and the stunt show booth by the ramps
+  places.taxi = { id: "taxi", label: "Taxi Stand", x: ROAD + 2 * PITCH + 8, z: ROAD + 2 * PITCH + BLOCK - 1.5 };
+  places.cafe = { id: "cafe", label: "Cocoa Cart", x: ROAD + BLOCK - 1.5, z: ROAD + 2 * PITCH + BLOCK / 2 };
+  places.stunt = { id: "stunt", label: "Stunt Show", x: CITY + 20, z: 100 };
   solids.push({ x: CITY + 20, z: 16, r: 3.2 });
   const ramps: Ramp[] = [60, 150, 232].map(z => ({ x0: CITY + 30, x1: CITY + 36, z0: z, z1: z + 9, h: 2.6 }));
   // coolers for "Cooler Collector": on the sand and along the streets
@@ -105,7 +109,7 @@ export function makeWorld(seed = 11): World {
 
   const parked: World["parked"] = [
     { ...places.cave.spawn!, kind: "buggy" }, { x: CITY + 12, z: 40, h: Math.PI / 2, kind: "buggy" }, { x: places.plaza.x + 12, z: places.plaza.z + 10, h: 0, kind: "buggy" },
-    { x: places.lifeguard.spawn!.x - 20, z: places.lifeguard.spawn!.z, h: 0, kind: "buggy" }, { ...places.depot.spawn!, kind: "truck" },
+    { x: places.lifeguard.spawn!.x - 20, z: places.lifeguard.spawn!.z, h: 0, kind: "buggy" }, { ...places.depot.spawn!, kind: "truck" }, { x: places.taxi.x + 4, z: places.taxi.z + 4, h: 0, kind: "taxi" },
   ];
   return { buildings, palms, solids, ramps, places, coolers, parked, walkways, props };
 }

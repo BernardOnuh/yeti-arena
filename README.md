@@ -16,7 +16,7 @@ Built for CLAY Hackathon III (Sui). Character art is an original yeti drawn for 
 | Fair-play page with a live cheat demo | Done |
 | Sui Move package `yeti_arena::arena` with 18 tests | Done, testnet publish next (`scripts/deploy-testnet.mjs`) |
 | Wallet connection (Sui dApp Kit), server attestation, on-chain result submission, badge claim | Done; switches on once the package is published |
-| Sunburn City (`/city`): original 3D open-world comedy caper. A Yeti on vacation in a golden-hour beach city: borrow cars, drift, beach ramps with air-time coins, lifeguard heat and chases, 3 capers (Brain Freeze Heist, Cooler Collector, Lifeguard Getaway), minimap, synthesized engine sounds and beach radio | Done (sandbox: coins saved in the browser, not verified or on chain) |
+| Sunburn City (`/city`): original 3D open-world comedy caper in a snowy (or sunny) beach city. Detailed cars, street furniture, interior-lit windows, lifeguard chases, 3 capers (Brain Freeze Heist, Cooler Collector, Lifeguard Getaway) and 3 jobs (Snow Cab taxi: 5 fares; Cocoa Rush; Stunt Show), a voice guide with turn-by-turn directions, original radio stations (Sunburn Pop FM, Beach Groove) or your own music, quality presets with auto frame-rate control | Done (sandbox: coins saved in the browser, not verified or on chain) |
 | Snowball Blitz, Yeti Memory | Later, only if Ice Dash is solid |
 
 ## How a score becomes verified

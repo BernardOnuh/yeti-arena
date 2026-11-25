@@ -47,15 +47,17 @@ export function makeNavigator() {
     if (key !== goalKey) { goalKey = key; lastKind = ""; arrived = ""; lastAt = 0; }
     const dist = Math.hypot(goal.x - me.x, goal.z - me.z);
     let rel = Math.atan2(goal.z - me.z, goal.x - me.x) - me.h; rel = Math.atan2(Math.sin(rel), Math.cos(rel));   // > 0: to the right
-    if (dist < 28) { if (arrived !== key) { arrived = key; guide.say(`You're almost at the ${goal.name}.`, 0); } return; }
+    // goal.name reads naturally on its own: "the passenger", "Ocean Avenue and Palm Street", "ramp 2"
+    const Name = goal.name.charAt(0).toUpperCase() + goal.name.slice(1);
+    if (dist < 28) { if (arrived !== key) { arrived = key; guide.say(`You're almost there: ${goal.name}.`, 0); } return; }
     const kind = Math.abs(rel) < 0.4 ? "ahead" : Math.abs(rel) > 2.4 ? "behind" : rel > 0 ? "right" : "left";
     if (kind !== pending) { pending = kind; stableSince = now; }
     const steady = now - stableSince > 1300, changed = kind !== lastKind, stale = now - lastAt > 14000;
     if (!steady || (!changed && !stale) || guide.speaking) return;
     const metres = dist > 150 ? `${Math.round(dist / 50) * 50} metres` : `${Math.round(dist / 10) * 10} metres`;
-    const line = kind === "ahead" ? `Keep going straight. The ${goal.name} is ${metres} ahead.`
-      : kind === "behind" ? `Turn around. The ${goal.name} is behind you.`
-      : `Turn ${kind}. The ${goal.name} is ${metres} away.`;
+    const line = kind === "ahead" ? `Keep going straight. ${Name} is ${metres} ahead.`
+      : kind === "behind" ? `Turn around. ${Name} is behind you.`
+      : `Turn ${kind}. ${Name} is ${metres} away.`;
     guide.say(line, 0); lastKind = kind; lastAt = now;
   };
 }

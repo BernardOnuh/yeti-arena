@@ -253,6 +253,7 @@ export function createScene(canvas: HTMLCanvasElement, g: Game) {
     const grp = new THREE.Group(); grp.add(mesh(coolerGeo, coolerMat), mesh(new THREE.BoxGeometry(1.26, 0.2, 0.86), lidMat, 0, 0.5, 0));
     grp.position.set(c.x, 0.5, c.z); grp.visible = false; scene.add(grp); return grp;
   });
+  const waiting = Array.from({ length: 4 }, (_, i) => { const m = makePerson(424242 + i * 977); m.root.visible = false; scene.add(m.root); return m; });
   const beamGeo = new THREE.CylinderGeometry(1.4, 1.4, 70, 20, 1, true);
   const beams = Array.from({ length: 10 }, () => {
     const b = new THREE.Mesh(beamGeo, new THREE.MeshBasicMaterial({ color: "#ffd84a", transparent: true, opacity: 0.32, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide }));
@@ -344,8 +345,16 @@ export function createScene(canvas: HTMLCanvasElement, g: Game) {
       cm.visible = idx >= 0 && !a!.got[idx]; cm.rotation.y = t * 1.5; cm.position.y = 0.6 + Math.sin(t * 3 + i) * 0.2;
     });
     const spots: { x: number; z: number; color: string }[] = a
-      ? objectives(g).map(o => ({ x: o.x, z: o.z, color: a.id === "coolers" ? "#4fc3ff" : o.label === "Cool Cave" ? "#7dffb0" : "#ff7ac0" }))
+      ? objectives(g).map(o => ({ x: o.x, z: o.z, color: a.id === "coolers" ? "#4fc3ff" : a.id === "taxi" ? (o.label === "Passenger" ? "#ffd23f" : "#7dffb0") : a.id === "cocoa" ? "#ffb070" : a.id === "stunts" ? "#c58bff" : o.label === "Cool Cave" ? "#7dffb0" : "#ff7ac0" }))
       : MISSIONS.map(m => ({ ...g.world.places[m.giver], color: g.done[m.id] !== undefined ? "#ffeaa0" : "#ffd84a" }));
+    // people waiting for you: the taxi passenger, the freezing tourists
+    const who = a ? objectives(g).filter(o => o.label === "Passenger" || o.label === "Freezing tourist") : [];
+    const me = g.car ?? g.yeti;
+    waiting.forEach((w, i) => {
+      const o = who[i]; w.root.visible = !!o; if (!o) return;
+      w.root.position.set(o.x, 0.12, o.z); w.root.rotation.set(0, -Math.atan2(me.z - o.z, me.x - o.x), 0);
+      w.pose(anim, "flail"); w.root.rotation.z = 0;   // arms up: waving you over
+    });
     beams.forEach((b, i) => {
       const s = spots[i]; b.visible = !!s;
       if (s) { b.position.set(s.x, 35, s.z); (b.material as THREE.MeshBasicMaterial).color.set(s.color); (b.material as THREE.MeshBasicMaterial).opacity = 0.26 + Math.sin(t * 3 + i) * 0.06; }
@@ -422,6 +431,11 @@ function makeVehicle(v: Vehicle) {
   const tire = mat("#1d1f24"), hub = mat("#d9d9d9");
   const wheel = (x: number, z: number) => { const w = new THREE.Group(); w.position.set(x, wheelGeo.parameters.radiusTop, z); w.add(mesh(wheelGeo, tire), mesh(new THREE.BoxGeometry(0.5, 0.12, 0.47), hub)); root.add(w); wheels.push(w); };
   let lights: THREE.MeshStandardMaterial[] | undefined, driver: ReturnType<typeof makePerson> | undefined;
+  if (v.taxi) {
+    const tex = (() => { const c = document.createElement("canvas"); c.width = 256; c.height = 64; const x = c.getContext("2d")!; x.fillStyle = "#fff4c2"; x.fillRect(0, 0, 256, 64); x.fillStyle = "#1a1a1a"; x.font = "bold 46px sans-serif"; x.textAlign = "center"; x.textBaseline = "middle"; x.fillText("TAXI", 128, 34); const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; return t; })();
+    const sign = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.3, 0.95), [mat("#ffe27a"), mat("#ffe27a"), mat("#ffe27a"), mat("#ffe27a"), new THREE.MeshStandardMaterial({ map: tex, emissive: "#fff1b0", emissiveMap: tex, emissiveIntensity: 0.6 }), new THREE.MeshStandardMaterial({ map: tex, emissive: "#fff1b0", emissiveMap: tex, emissiveIntensity: 0.6 })]);
+    sign.position.set(-0.35, 1.32, 0); sign.castShadow = true; sign.userData.keep = true; root.add(sign);   // on the roof of either level of detail
+  }
   if (v.kind === "buggy") {
     root.add(mesh(new THREE.BoxGeometry(3.4, 0.55, 1.9), paint(v.color), 0, 0.85, 0));
     root.add(mesh(new THREE.BoxGeometry(1.1, 0.35, 1.7), mat("#ffd166"), 1.3, 1.25, 0));
@@ -452,6 +466,6 @@ function makeVehicle(v: Vehicle) {
     for (const [x, z] of [[1.35, -1.0], [1.35, 1.0], [-1.35, -1.0], [-1.35, 1.0]]) wheel(x, z);
   }
   // the simple model is the far-away level of detail; near the camera a detailed car can take its place
-  const lo = new THREE.Group(); for (const c of [...root.children]) if (c !== driver?.root) lo.add(c); root.add(lo);
+  const lo = new THREE.Group(); for (const c of [...root.children]) if (c !== driver?.root && !c.userData.keep) lo.add(c); root.add(lo);
   return { root, wheels, lights, driver, lo, hi: null as THREE.Group | null };
 }

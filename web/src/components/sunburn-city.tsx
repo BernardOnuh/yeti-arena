@@ -3,7 +3,7 @@
 // a lifeguard alert meter, a minimap, keyboard and touch controls, and coins saved in this browser.
 import { useEffect, useRef, useState } from "react";
 import { Coins, Gauge, Megaphone, MegaphoneOff, Navigation, Pause, Play, Radio, Settings, Snowflake, Sun, Volume2, VolumeX } from "lucide-react";
-import { MISSIONS, newGame, objectives, speedOf, step, type Card, type Game, type Keys } from "@/game/city/game";
+import { MISSIONS, TAXI_FARES, newGame, objectives, speedOf, step, type Card, type Game, type Keys } from "@/game/city/game";
 import { createScene, type Quality } from "@/game/city/scene";
 import { STATIONS, cityAudio, type Station } from "@/game/city/audio";
 import { guide, makeNavigator } from "@/game/city/voice";
@@ -76,6 +76,7 @@ export function SunburnCity() {
     const navigate = makeNavigator();
     let lastHeat = 0, lastPrompt = "", lastPromptAt = 0, lastWhistle = 0;
     const speakEvent = (e: string) => {
+      if (e.startsWith("say:")) { guide.say(e.slice(4), 1); return; }
       const def = g.active && MISSIONS.find(m => m.id === g.active!.id);
       if (e === "start" && def) guide.say(`${def.title}! ${def.blurb}`, 2);
       else if (e === "win" && g.card) guide.say(`Caper complete! ${g.card.sub.replace(" · ", ". ")}.`, 2);
@@ -129,17 +130,21 @@ export function SunburnCity() {
           // directions: to the caper's goal, or to the nearest caper you haven't done
           const me = g.car ?? g.yeti, h = g.car ? g.car.h : g.yeti.h;
           let goal: { x: number; z: number; name: string } | null = null;
-          if (g.active) { const o = objectives(g).sort((u, v) => Math.hypot(u.x - me.x, u.z - me.z) - Math.hypot(v.x - me.x, v.z - me.z))[0]; if (o) goal = { x: o.x, z: o.z, name: o.label.toLowerCase() }; }
+          if (g.active) { const o = objectives(g).sort((u, v) => Math.hypot(u.x - me.x, u.z - me.z) - Math.hypot(v.x - me.x, v.z - me.z))[0]; if (o) goal = { x: o.x, z: o.z, name: /^(passenger|freezing tourist|ice cream truck|cooler)$/i.test(o.label) ? `the ${o.label.toLowerCase()}` : o.label.replace(/^Ramp/, "ramp") }; }
           else {
             const open = MISSIONS.filter(m => g.done[m.id] === undefined), pool = open.length ? open : MISSIONS;
             const best = pool.map(m => ({ m, p: g.world.places[m.giver] })).sort((u, v) => Math.hypot(u.p.x - me.x, u.p.z - me.z) - Math.hypot(v.p.x - me.x, v.p.z - me.z))[0];
-            if (best) goal = { x: best.p.x, z: best.p.z, name: `${best.m.title} caper` };
+            if (best) goal = { x: best.p.x, z: best.p.z, name: `the ${best.m.title} ${best.m.id === "taxi" || best.m.id === "cocoa" || best.m.id === "stunts" ? "job" : "caper"}` };
           }
           navigate(now, { x: me.x, z: me.z, h }, goal);
         }
         const a = g.active, def = a && MISSIONS.find(m => m.id === a.id)!;
         const stepText = !a ? "" : a.id === "heist" ? (a.stage === 0 ? "Get in the ice cream truck" : g.car !== a.truck ? "Get back in the truck!" : "Drive it to the Cool Cave. It's melting!")
-          : a.id === "coolers" ? `Coolers ${a.got.filter(Boolean).length}/6` : `Shake the lifeguards: ${g.heat} still on you`;
+          : a.id === "coolers" ? `Coolers ${a.got.filter(Boolean).length}/6`
+          : a.id === "taxi" ? `Fare ${a.fare}/${TAXI_FARES} · ${a.stage === 0 ? "Pick up your passenger" : `Drop off: ${a.drop!.name}`} · earned ${a.earned}`
+          : a.id === "cocoa" ? `Cocoa delivered ${a.got.filter(Boolean).length}/4`
+          : a.id === "stunts" ? `Ramps jumped ${a.got.filter(Boolean).length}/3`
+          : `Shake the lifeguards: ${g.heat} still on you`;
         const p = g.car ?? g.yeti, heading = g.car ? g.car.h : g.yeti.h;
         const targets = objectives(g), near = targets.sort((u, v) => Math.hypot(u.x - p.x, u.z - p.z) - Math.hypot(v.x - p.x, v.z - p.z))[0];
         setHud({
@@ -227,7 +232,7 @@ export function SunburnCity() {
                 <div className="font-display text-[17px] font-bold tracking-wide">{hud.caper.title}</div>
                 <div className="mt-0.5 flex items-center gap-3 text-[13px] font-bold"><span className="text-amber-200">{hud.caper.step}</span><span className={`tabular-nums ${hud.caper.left < 15 ? "text-rose-300" : "text-white/80"}`}>{hud.caper.left.toFixed(0)}s</span></div>
               </div>
-            ) : started && <div className={`${chip} px-3.5 py-2 text-[13px] font-bold text-white/90`}>Follow a golden beam to start a caper · {hud.done}/3 done</div>}
+            ) : started && <div className={`${chip} px-3.5 py-2 text-[13px] font-bold text-white/90`}>Follow a golden beam to start a caper or a job · {hud.done}/{MISSIONS.length} done</div>}
             {hud.heat > 0 && (
               <div className={`${chip} flex items-center gap-2 px-3 py-1.5 text-[12px] font-black uppercase tracking-wider text-white`}>
                 Lifeguard alert

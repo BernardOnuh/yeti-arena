@@ -6,20 +6,28 @@ export interface Keys { up: boolean; down: boolean; left: boolean; right: boolea
 export type VKind = "buggy" | "truck" | "car" | "lifeguard";
 export type Ai = "parked" | "traffic" | "lifeguard" | "player";
 export interface Vehicle {
-  id: number; kind: VKind; ai: Ai; color: string;
+  id: number; kind: VKind; ai: Ai; color: string; taxi?: boolean; rampIdx?: number;
   x: number; z: number; y: number; vx: number; vz: number; vy: number; h: number; air: number;
   dir: 0 | 1 | 2 | 3; speed: number; stun: number; stuck: number; reverse: number; wheel: number;
 }
 export interface Ped { x: number; z: number; y: number; seg: number; t: number; way: 1 | -1; speed: number; shirt: string; down: number; fx: number; fz: number; fy: number; spin: number; h: number }
 
-export type MissionId = "heist" | "coolers" | "getaway";
+export type MissionId = "heist" | "coolers" | "getaway" | "taxi" | "cocoa" | "stunts";
 export interface MissionDef { id: MissionId; title: string; giver: string; blurb: string; time: number; reward: number }
 export const MISSIONS: MissionDef[] = [
   { id: "heist", title: "Brain Freeze Heist", giver: "depot", blurb: "Swipe the ice cream truck and get it to the Cool Cave before it melts.", time: 90, reward: 900 },
   { id: "coolers", title: "Cooler Collector", giver: "tiki", blurb: "Tourists left 6 coolers around town. Grab them all before they warm up.", time: 100, reward: 700 },
   { id: "getaway", title: "Lifeguard Getaway", giver: "lifeguard", blurb: "You honked at the lifeguard tower. Now shake all three lifeguard jeeps.", time: 120, reward: 1100 },
+  { id: "taxi", title: "Snow Cab", giver: "taxi", blurb: "Five passengers need a ride. Pick them up and get them there fast. Smooth, quick rides earn bigger tips.", time: 0, reward: 0 },
+  { id: "cocoa", title: "Cocoa Rush", giver: "cafe", blurb: "Four tourists are freezing. Bring each of them hot cocoa before it goes cold.", time: 110, reward: 750 },
+  { id: "stunts", title: "Stunt Show", giver: "stunt", blurb: "The crowd wants big air. Land a jump off all three beach ramps.", time: 100, reward: 800 },
 ];
-export interface Active { id: MissionId; stage: number; left: number; targets: { x: number; z: number }[]; got: boolean[]; truck?: Vehicle }
+export const TAXI_FARES = 5;
+export interface Spot { x: number; z: number; name: string }
+export interface Active {
+  id: MissionId; stage: number; left: number; targets: { x: number; z: number }[]; got: boolean[]; truck?: Vehicle;
+  fare?: number; pickup?: Spot; drop?: Spot; earned?: number; bumps?: number;   // the taxi job
+}
 export interface Card { title: string; sub: string; tone: "mission" | "good" | "bad"; until: number }
 
 export interface Game {
@@ -31,6 +39,7 @@ export interface Game {
   active: Active | null; toast: { text: string; until: number } | null; card: Card | null; prompt: string | null;
   shake: number; events: string[]; nextId: number;
   weather: "snow" | "sun";
+  lastJump: { ramp: number; air: number } | null;
 }
 
 const DIRS = [[1, 0], [0, 1], [-1, 0], [0, -1]] as const; // E S W N
@@ -47,10 +56,13 @@ export function newGame(): Game {
   // the Yeti starts on the boardwalk, with the ocean behind it
   const g: Game = {
     world, time: 0, yeti: { x: CITY + 9, z: 52, h: Math.PI, walk: 0 }, car: null, vehicles: [], peds: [],
-    coins: 0, done: {}, heat: 0, heatCool: 0, bust: 0, active: null, toast: null, prompt: null, shake: 0, events: [], nextId: 1, weather: "snow",
+    coins: 0, done: {}, heat: 0, heatCool: 0, bust: 0, active: null, toast: null, prompt: null, shake: 0, events: [], nextId: 1, weather: "snow", lastJump: null,
     card: { title: "Sunburn City", sub: "A Yeti on vacation. What could go wrong?", tone: "mission", until: 3.2 },
   };
-  for (const p of world.parked) g.vehicles.push(vehicle(g, p.kind, "parked", p.x, p.z, p.h, p.kind === "truck" ? "#fff0f6" : "#ff7a59"));
+  for (const p of world.parked) {
+    const v = vehicle(g, p.kind === "taxi" ? "car" : p.kind, "parked", p.x, p.z, p.h, p.kind === "truck" ? "#fff0f6" : p.kind === "taxi" ? "#ffc61a" : "#ff7a59");
+    v.taxi = p.kind === "taxi"; g.vehicles.push(v);
+  }
   for (let i = 0; i < 18; i++) {
     const horizontal = i % 2 === 0, road = Math.floor(Math.random() * (N + 1)), along = roadC(Math.floor(Math.random() * N)) + PITCH / 2;
     const dir = (horizontal ? (Math.random() < 0.5 ? 0 : 2) : (Math.random() < 0.5 ? 1 : 3)) as Vehicle["dir"];
@@ -93,12 +105,12 @@ function drive(g: Game, v: Vehicle, throttle: number, steer: number, brake: bool
   const gy = groundAt(g.world, v.x, v.z);
   if (!airborne) {
     if (gy - v.y > 0.7) { v.x = px; v.z = pz; v.vx *= -0.3; v.vz *= -0.3; }   // the back or side of a ramp is a wall
-    else if (gy >= v.y - 0.3) { v.vy = (gy - v.y) / dt; v.y = gy; }          // still on the ground (or the ramp)
+    else if (gy >= v.y - 0.3) { v.vy = (gy - v.y) / dt; v.y = gy; if (gy > 0) v.rampIdx = g.world.ramps.findIndex(r => v.x >= r.x0 && v.x <= r.x1 && v.z >= r.z0 && v.z <= r.z1); }   // on the ground (or a ramp)
     else { v.air = dt; v.y += v.vy * dt; }                                   // the ground dropped away: take off
   } else {
     v.air += dt; v.vy -= 24 * dt; v.y += v.vy * dt;
     if (v.y <= gy) {
-      if (v.air > 0.55 && v.ai === "player") { const bonus = Math.round(v.air * 70); g.coins += bonus; toast(g, `Big air! ${v.air.toFixed(1)}s · +${bonus} coins`); g.events.push("stunt"); }
+      if (v.air > 0.55 && v.ai === "player") { const bonus = Math.round(v.air * 70); g.coins += bonus; toast(g, `Big air! ${v.air.toFixed(1)}s · +${bonus} coins`); g.events.push("stunt"); g.lastJump = { ramp: v.rampIdx ?? -1, air: v.air }; }
       if (v.ai === "player") g.shake = Math.max(g.shake, 0.4);
       v.y = gy; v.vy = 0; v.air = 0;
     }
@@ -118,18 +130,43 @@ function startMission(g: Game, def: MissionDef) {
     if (g.car === a.truck) beginGetaway(g, a);
   } else if (def.id === "coolers") {
     a.targets = [...g.world.coolers].sort(() => Math.random() - 0.5).slice(0, 6); a.got = a.targets.map(() => false);
+  } else if (def.id === "taxi") {
+    a.fare = 1; a.earned = 0; g.active = a; newFare(g, a);
+  } else if (def.id === "cocoa") {
+    const c = g.world.places.cafe;
+    a.targets = shuffle(spots(g).filter(sp => { const d = Math.hypot(sp.x - c.x, sp.z - c.z); return d > 50 && d < 230; })).slice(0, 4); a.got = a.targets.map(() => false);
+  } else if (def.id === "stunts") {
+    a.targets = g.world.ramps.map(r => ({ x: (r.x0 + r.x1) / 2, z: r.z0 - 2 })); a.got = a.targets.map(() => false); g.lastJump = null;
   } else { setHeat(g, 3); }
   g.active = a;
   card(g, def.title, def.blurb, "mission", 3.4); g.events.push("start");
+}
+// places a passenger can be picked up from or dropped at: the named places, and street corners
+const STREETS = ["Palm Street", "Coconut Street", "Seashell Street", "Sunset Street", "Flamingo Street"];
+const AVENUES = ["First Avenue", "Second Avenue", "Third Avenue", "Fourth Avenue", "Ocean Avenue"];
+function spots(g: Game): Spot[] {
+  const out: Spot[] = Object.values(g.world.places).filter(p => p.id !== "plaza").map(p => ({ x: p.x, z: p.z, name: p.label.replace(" (your hideout)", "") }));
+  for (let i = 0; i < N; i++) for (let j = 0; j < N; j++) out.push({ x: roadC(i) + 7.5, z: roadC(j) + 7.5, name: `${AVENUES[i]} and ${STREETS[j]}` });
+  return out;
+}
+function shuffle<T>(xs: T[]) { return xs.map(x => [Math.random(), x] as const).sort((a, b) => a[0] - b[0]).map(p => p[1]); }
+function newFare(g: Game, a: Active) {
+  const p = me(g), all = spots(g);
+  const near = (from: { x: number; z: number }, lo: number, hi: number) => shuffle(all.filter(s => { const d = Math.hypot(s.x - from.x, s.z - from.z); return d > lo && d < hi; }))[0] ?? all[0];
+  a.pickup = near(p, 35, 140); a.drop = near(a.pickup, 110, 280); a.stage = 0; a.bumps = 0;
+  a.left = 35 + (Math.hypot(a.pickup.x - p.x, a.pickup.z - p.z) + Math.hypot(a.drop.x - a.pickup.x, a.drop.z - a.pickup.z)) / 6.5;
+  a.targets = [a.pickup];
+  if (a.fare! > 1) g.events.push(`say:Next passenger is waiting near ${a.pickup.name}.`);
 }
 function beginGetaway(g: Game, a: Active) { a.stage = 1; a.left = 90; setHeat(g, 2); toast(g, "The lifeguards saw that! Get to the Cool Cave!", 3); }
 
 function endMission(g: Game, ok: boolean, why = "") {
   const a = g.active!, def = MISSIONS.find(m => m.id === a.id)!;
   if (ok) {
-    const pay = def.reward + Math.round(a.left * 5);
-    g.coins += pay; g.done[a.id] = Math.max(g.done[a.id] ?? 0, pay);
-    card(g, "Caper complete!", `${def.title} · +${pay} coins`, "good", 3.4); g.events.push("win");
+    const pay = a.id === "taxi" ? a.earned ?? 0 : def.reward + Math.round(a.left * 5);
+    if (a.id !== "taxi") g.coins += pay;   // taxi fares were paid ride by ride
+    g.done[a.id] = Math.max(g.done[a.id] ?? 0, pay);
+    card(g, a.id === "taxi" ? "Shift complete!" : "Caper complete!", `${def.title} · +${pay} coins`, "good", 3.4); g.events.push("win");
     setHeat(g, 0);
   } else { card(g, "Caper failed", why || `${def.title}: out of time`, "bad", 3.2); g.events.push("fail"); }
   g.active = null;
@@ -178,7 +215,7 @@ export function step(g: Game, k: Keys, dt: number) {
   if (giver) { g.prompt = `E · start "${giver.title}" (${giver.reward}+ coins)`; if (act) { startMission(g, giver); act = false; } }
   if (!g.car) {
     const near = g.vehicles.filter(v => v.ai !== "lifeguard").map(v => ({ v, d: Math.hypot(v.x - g.yeti.x, v.z - g.yeti.z) - STATS[v.kind].r })).filter(o => o.d < 2.6).sort((a, b) => a.d - b.d)[0]?.v;
-    if (near && !g.prompt) g.prompt = near.ai === "traffic" ? "E · borrow this car (the owner will NOT be happy)" : `E · hop in the ${near.kind === "truck" ? "ice cream truck" : near.kind}`;
+    if (near && !g.prompt) g.prompt = near.ai === "traffic" ? "E · borrow this car (the owner will NOT be happy)" : `E · hop in the ${near.kind === "truck" ? "ice cream truck" : near.taxi ? "taxi" : near.kind}`;
     if (near && act) {
       act = false;
       if (near.ai === "traffic") {
@@ -228,6 +265,44 @@ export function step(g: Game, k: Keys, dt: number) {
       });
       if (a.got.every(Boolean)) return endMission(g, true);
       if (a.left <= 0) return endMission(g, false, "The coolers got warm. Nobody wants warm soda.");
+    } else if (a.id === "taxi") {
+      const sp = g.car ? speedOf(g.car) : 0;
+      if (a.stage === 0) {
+        if (Math.hypot(a.pickup!.x - p.x, a.pickup!.z - p.z) < 8) {
+          if (!g.car) { if (!g.prompt) g.prompt = "Get a vehicle to pick up your passenger"; }
+          else if (sp < 5) { a.stage = 1; a.targets = [a.drop!]; g.events.push("door", `say:Passenger in. Take them to ${a.drop!.name}.`); toast(g, `Passenger in! Drop-off: ${a.drop!.name}`, 2.4); }
+          else if (!g.prompt) g.prompt = "Slow down to let your passenger in";
+        }
+      } else {
+        if (!g.car) { if (!g.prompt) g.prompt = "Get back in, your passenger is waiting!"; }
+        if (g.events.includes("crash")) { a.bumps = (a.bumps ?? 0) + 1; if (a.bumps === 1 || a.bumps % 3 === 0) g.events.push("say:Whoa, careful! There goes your tip."); }
+        if (g.car && Math.hypot(a.drop!.x - p.x, a.drop!.z - p.z) < 9 && sp < 5) {
+          const ride = Math.hypot(a.drop!.x - a.pickup!.x, a.drop!.z - a.pickup!.z);
+          const pay = Math.max(25, Math.round(ride * 0.9 + Math.max(0, a.left) * 3 - (a.bumps ?? 0) * 20) + (a.fare! >= 3 && !a.bumps ? 50 : 0));
+          g.coins += pay; a.earned = (a.earned ?? 0) + pay; g.events.push("coin");
+          toast(g, `Fare ${a.fare}/${TAXI_FARES} paid: +${pay} coins`, 2.4);
+          if (a.fare! >= TAXI_FARES) { g.events.push(`say:Thanks! Here's ${pay} coins.`); return endMission(g, true); }
+          g.events.push(`say:Thanks! Here's ${pay} coins.`); a.fare! += 1; newFare(g, a);
+        }
+      }
+      if (a.left <= 0) return endMission(g, false, a.stage === 0 ? "Your passenger gave up and called another cab." : "Your passenger got out and walked.");
+    } else if (a.id === "cocoa") {
+      a.targets.forEach((t, i) => {
+        if (!a.got[i] && Math.hypot(t.x - p.x, t.z - p.z) < 3.5 + (g.car ? STATS[g.car.kind].r : 0.7)) {
+          a.got[i] = true; g.events.push("coin"); const left = a.got.filter(x => !x).length;
+          toast(g, `Cocoa delivered! ${left} to go`, 1.6); if (left) g.events.push(`say:Thank you! ${left} more to go.`);
+        }
+      });
+      if (a.got.every(Boolean)) return endMission(g, true);
+      if (a.left <= 0) return endMission(g, false, "The cocoa went cold. The tourists went home.");
+    } else if (a.id === "stunts") {
+      const j = g.lastJump; g.lastJump = null;
+      if (j && j.ramp >= 0 && !a.got[j.ramp]) {
+        a.got[j.ramp] = true; const left = a.got.filter(x => !x).length;
+        toast(g, `The crowd loves it! ${left} ramp${left === 1 ? "" : "s"} to go`, 1.8); if (left) g.events.push(`say:Amazing! ${left} more ramp${left === 1 ? "" : "s"} to go.`);
+      }
+      if (a.got.every(Boolean)) return endMission(g, true);
+      if (a.left <= 0) return endMission(g, false, "The crowd went home. Try more speed off the ramps.");
     } else {
       if (g.heat === 0) return endMission(g, true);
       if (a.left <= 0) return endMission(g, false, "The lifeguards never gave up.");
@@ -338,6 +413,9 @@ export function objectives(g: Game): { x: number; z: number; label: string }[] {
   if (!a) return [];
   if (a.id === "coolers") return a.targets.filter((_, i) => !a.got[i]).map(t => ({ ...t, label: "Cooler" }));
   if (a.id === "heist") return a.targets.map(t => ({ ...t, label: a.stage === 0 || g.car !== a.truck ? "Ice cream truck" : "Cool Cave" }));
+  if (a.id === "taxi") return a.stage === 0 ? [{ x: a.pickup!.x, z: a.pickup!.z, label: "Passenger" }] : [{ x: a.drop!.x, z: a.drop!.z, label: a.drop!.name }];
+  if (a.id === "cocoa") return a.targets.filter((_, i) => !a.got[i]).map(t => ({ ...t, label: "Freezing tourist" }));
+  if (a.id === "stunts") return a.targets.map((t, i) => ({ ...t, i })).filter(t => !a.got[t.i]).map(t => ({ x: t.x, z: t.z, label: `Ramp ${t.i + 1}` }));
   return [];
 }
 export const STATS_R = (k: VKind) => STATS[k].r;
