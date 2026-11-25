@@ -2,10 +2,11 @@
 // Sunburn City: a 3D open-world comedy caper. Fixed 60 Hz simulation, three.js scene, HUD with cinematic title cards,
 // a lifeguard alert meter, a minimap, keyboard and touch controls, and coins saved in this browser.
 import { useEffect, useRef, useState } from "react";
-import { Coins, Gauge, Navigation, Pause, Play, Radio, Settings, Snowflake, Sun, Volume2, VolumeX } from "lucide-react";
+import { Coins, Gauge, Megaphone, MegaphoneOff, Navigation, Pause, Play, Radio, Settings, Snowflake, Sun, Volume2, VolumeX } from "lucide-react";
 import { MISSIONS, newGame, objectives, speedOf, step, type Card, type Game, type Keys } from "@/game/city/game";
 import { createScene, type Quality } from "@/game/city/scene";
-import { cityAudio } from "@/game/city/audio";
+import { STATIONS, cityAudio, type Station } from "@/game/city/audio";
+import { guide, makeNavigator } from "@/game/city/voice";
 import { BLOCK, BOUNDS, CITY, N, PITCH, ROAD, SAND_END } from "@/game/city/world";
 
 const SAVE = "sunburn-city:v1";
@@ -27,7 +28,10 @@ interface Hud {
 export function SunburnCity() {
   const canvas = useRef<HTMLCanvasElement>(null), mini = useRef<HTMLCanvasElement>(null);
   const keys = useRef<Keys>({ up: false, down: false, left: false, right: false, brake: false, action: false, horn: false });
-  const [started, setStarted] = useState(false), [paused, setPaused] = useState(false), [muted, setMuted] = useState(false), [radio, setRadio] = useState(true);
+  const [started, setStarted] = useState(false), [paused, setPaused] = useState(false), [muted, setMuted] = useState(false), [station, setStationState] = useState<Station>("pop");
+  const [voiceOn, setVoiceOn] = useState(true), [radioNote, setRadioNote] = useState<string | null>(null);
+  const myMusic = useRef<{ el: HTMLAudioElement | null; urls: string[]; i: number }>({ el: null, urls: [], i: 0 });
+  const filePick = useRef<HTMLInputElement>(null);
   const [error, setError] = useState<string | null>(null);
   const [snowing, setSnowing] = useState(true);
   const gameRef = useRef<Game | null>(null);
@@ -49,10 +53,12 @@ export function SunburnCity() {
     let scene: ReturnType<typeof createScene>;
     try { scene = createScene(cv, g); } catch (e) { setError(e instanceof Error ? e.message : "WebGL isn't available"); return; }
     sceneRef.current = scene;
-    let saved: { quality?: QualitySetting; fps?: boolean } = {};
+    let saved: { quality?: QualitySetting; fps?: boolean; voice?: boolean; station?: Station } = {};
     try { saved = JSON.parse(localStorage.getItem(SETTINGS) || "{}"); } catch { /* defaults */ }
     if (saved.quality) { setQualitySetting(saved.quality); qualityRef.current = saved.quality; }
     if (saved.fps) setShowFps(true);
+    if (saved.voice === false) { guide.enabled = false; setVoiceOn(false); }
+    if (saved.station && saved.station !== "mine") { cityAudio.setStation(saved.station); setStationState(saved.station); }
     // auto quality starts high on a desktop and medium on a phone, then steps down to hold the frame rate
     const phone = matchMedia("(pointer: coarse)").matches || innerWidth < 700;
     let level: Quality = qualityRef.current === "auto" ? (phone ? "medium" : "high") : qualityRef.current, scale = 1, smooth = 0;
@@ -64,15 +70,40 @@ export function SunburnCity() {
     const ro = new ResizeObserver(resize); ro.observe(cv);
     const mapImg = drawMapBase();
     let raf = 0, last = performance.now(), acc = 0, hudAt = 0, saveAt = 0;
+    // the voice guide: what happened, what you can do here, and where to go
+    guide.init();
+    if (process.env.NODE_ENV !== "production") (window as unknown as { __guide: typeof guide }).__guide = guide; // for the browser test
+    const navigate = makeNavigator();
+    let lastHeat = 0, lastPrompt = "", lastPromptAt = 0, lastWhistle = 0;
+    const speakEvent = (e: string) => {
+      const def = g.active && MISSIONS.find(m => m.id === g.active!.id);
+      if (e === "start" && def) guide.say(`${def.title}! ${def.blurb}`, 2);
+      else if (e === "win" && g.card) guide.say(`Caper complete! ${g.card.sub.replace(" · ", ". ")}.`, 2);
+      else if (e === "fail" && g.card) guide.say(`Caper failed. ${g.card.sub}`, 2);
+      else if (e === "bust" && g.card) guide.say(`Busted! ${g.card.sub}`, 2);
+      else if (e === "whistle" && g.heat > lastHeat && performance.now() - lastWhistle > 6000) {
+        lastWhistle = performance.now();
+        guide.say(g.heat === 1 ? "Uh oh. A lifeguard spotted you." : `Lifeguard alert, level ${g.heat}! Lose them!`, 1);
+      } else if (e === "stunt") guide.say("Big air!", 0);
+    };
+    const speakPrompt = (prompt: string | null) => {
+      if (!prompt || prompt === lastPrompt && performance.now() - lastPromptAt < 15000) { if (!prompt) lastPrompt = ""; return; }
+      if (prompt === lastPrompt) return;
+      lastPrompt = prompt; lastPromptAt = performance.now();
+      const line = prompt.replace(/^E · /, "Press E to ").replace(/[“”"]/g, "").replace(/\s*\(.*?\)/g, "").replace("the owner will NOT be happy", "the owner won't be happy");
+      guide.say(line + ".", 1);
+    };
     const frame = (now: number) => {
       const dt = Math.min(0.1, (now - last) / 1000); last = now;
       const running = startedRef.current && !pausedRef.current;
       if (running) {
         acc += dt;
         while (acc >= STEP) { step(g, keys.current, STEP); acc -= STEP; }
-        for (const e of g.events.splice(0)) cityAudio.play(e);
+        for (const e of g.events.splice(0)) { cityAudio.play(e); speakEvent(e); }
       }
-      cityAudio.frame(running && !!g.car, g.car ? speedOf(g.car) : 0);
+      cityAudio.frame(running && !!g.car, g.car ? speedOf(g.car) : 0, startedRef.current);
+      const mm = myMusic.current;
+      if (mm.el) mm.el.volume = cityAudio.station === "mine" && !cityAudio.muted ? cityAudio.musicLevel(startedRef.current) : 0;
       scene.update(running ? dt : 0, dt, !startedRef.current);
       frames++;
       if (now - perfAt >= 1000) {
@@ -91,6 +122,21 @@ export function SunburnCity() {
       if (mini.current) drawMinimap(mini.current, mapImg, g);
       if (now - hudAt > 100) {
         hudAt = now;
+        if (running) {
+          speakPrompt(g.prompt);
+          if (lastHeat > 0 && g.heat === 0) guide.say("You shook the lifeguards. Nice driving.", 1);
+          lastHeat = g.heat;
+          // directions: to the caper's goal, or to the nearest caper you haven't done
+          const me = g.car ?? g.yeti, h = g.car ? g.car.h : g.yeti.h;
+          let goal: { x: number; z: number; name: string } | null = null;
+          if (g.active) { const o = objectives(g).sort((u, v) => Math.hypot(u.x - me.x, u.z - me.z) - Math.hypot(v.x - me.x, v.z - me.z))[0]; if (o) goal = { x: o.x, z: o.z, name: o.label.toLowerCase() }; }
+          else {
+            const open = MISSIONS.filter(m => g.done[m.id] === undefined), pool = open.length ? open : MISSIONS;
+            const best = pool.map(m => ({ m, p: g.world.places[m.giver] })).sort((u, v) => Math.hypot(u.p.x - me.x, u.p.z - me.z) - Math.hypot(v.p.x - me.x, v.p.z - me.z))[0];
+            if (best) goal = { x: best.p.x, z: best.p.z, name: `${best.m.title} caper` };
+          }
+          navigate(now, { x: me.x, z: me.z, h }, goal);
+        }
         const a = g.active, def = a && MISSIONS.find(m => m.id === a.id)!;
         const stepText = !a ? "" : a.id === "heist" ? (a.stage === 0 ? "Get in the ice cream truck" : g.car !== a.truck ? "Get back in the truck!" : "Drive it to the Cool Cave. It's melting!")
           : a.id === "coolers" ? `Coolers ${a.got.filter(Boolean).length}/6` : `Shake the lifeguards: ${g.heat} still on you`;
@@ -112,7 +158,8 @@ export function SunburnCity() {
   useEffect(() => {
     const down = (e: KeyboardEvent) => {
       if (e.code === "KeyP" || e.code === "Escape") { setPaused(p => !p); return; }
-      if (e.code === "KeyR") { cityAudio.radio = !cityAudio.radio; setRadio(cityAudio.radio); return; }
+      if (e.code === "KeyR") { cycleStation(); return; }
+      if (e.code === "KeyV") { toggleVoice(); return; }
       if (e.code === "KeyN") { toggleWeather(); return; }
       if (e.code === "KeyF") { setShowFps(v => { saveSettings({ fps: !v }); return !v; }); return; }
       const k = KEYMAP[e.code]; if (!k) return;
@@ -125,8 +172,36 @@ export function SunburnCity() {
     return () => { window.removeEventListener("keydown", down); window.removeEventListener("keyup", up); };
   }, []);
 
-  function begin() { cityAudio.unlock(); setStarted(true); }
-  function saveSettings(patch: { quality?: QualitySetting; fps?: boolean }) {
+  function begin() {
+    cityAudio.unlock(); setStarted(true);
+    if (cityAudio.station === "mine") playMine();
+    guide.say("Welcome to Sunburn City! I'm your guide. Use W A S D to move, press E to hop into a car, and follow the golden beams to start a caper. I'll tell you where to go. Press V to mute me, and R to change the radio.", 2);
+  }
+  function toggleVoice() { const on = !guide.enabled; guide.enabled = on; if (!on) guide.stop(); setVoiceOn(on); saveSettings({ voice: on }); if (on) guide.say("Voice guide on.", 2); }
+  function playMine() {
+    const mm = myMusic.current;
+    if (!mm.urls.length) { filePick.current?.click(); return; }
+    if (!mm.el) { mm.el = new Audio(); mm.el.addEventListener("ended", () => { mm.i = (mm.i + 1) % mm.urls.length; mm.el!.src = mm.urls[mm.i]; void mm.el!.play(); }); }
+    if (!mm.el.src) mm.el.src = mm.urls[mm.i];
+    void mm.el.play().catch(() => undefined);
+  }
+  function setStation(s: Station) {
+    cityAudio.setStation(s); setStationState(s); saveSettings({ station: s });
+    const mm = myMusic.current;
+    if (s === "mine") playMine(); else mm.el?.pause();
+    setRadioNote(`📻 ${STATIONS.find(x => x.id === s)!.name}${s === "mine" && !mm.urls.length ? ": pick some songs" : ""}`);
+    setTimeout(() => setRadioNote(null), 2200);
+  }
+  function cycleStation() { const i = STATIONS.findIndex(x => x.id === cityAudio.station); setStation(STATIONS[(i + 1) % STATIONS.length].id); }
+  function onFiles(files: FileList | null) {
+    if (!files?.length) return;
+    const mm = myMusic.current; mm.urls.forEach(u => URL.revokeObjectURL(u));
+    mm.urls = [...files].filter(f => f.type.startsWith("audio/")).map(f => URL.createObjectURL(f)); mm.i = 0;
+    if (mm.el) mm.el.src = "";
+    setRadioNote(`📻 My Music: ${mm.urls.length} song${mm.urls.length === 1 ? "" : "s"}`); setTimeout(() => setRadioNote(null), 2200);
+    if (cityAudio.station === "mine") playMine();
+  }
+  function saveSettings(patch: { quality?: QualitySetting; fps?: boolean; voice?: boolean; station?: Station }) {
     try { const cur = JSON.parse(localStorage.getItem(SETTINGS) || "{}"); localStorage.setItem(SETTINGS, JSON.stringify({ ...cur, ...patch })); } catch { /* private mode */ }
   }
   function chooseQuality(q: QualitySetting) { setQualitySetting(q); qualityRef.current = q; saveSettings({ quality: q }); }
@@ -164,7 +239,8 @@ export function SunburnCity() {
             <div className={`${chip} flex items-center gap-1.5 px-3 py-2 font-display text-[18px] font-bold tabular-nums text-amber-300`}><Coins className="h-4 w-4" />{hud.coins.toLocaleString()}</div>
             <button className={`${chip} pointer-events-auto grid h-10 w-10 place-items-center text-white`} aria-label="Graphics settings" title="Graphics settings" onClick={() => setSettingsOpen(o => !o)}><Settings className="h-4 w-4" /></button>
             <button className={`${chip} pointer-events-auto grid h-10 w-10 place-items-center text-white`} aria-label={snowing ? "Make it sunny (N)" : "Make it snow (N)"} title={snowing ? "Make it sunny (N)" : "Make it snow (N)"} onClick={toggleWeather}>{snowing ? <Sun className="h-4 w-4" /> : <Snowflake className="h-4 w-4" />}</button>
-            <button className={`${chip} pointer-events-auto grid h-10 w-10 place-items-center text-white ${radio ? "" : "opacity-50"}`} aria-label="Radio (R)" title="Radio (R)" onClick={() => { cityAudio.radio = !radio; setRadio(!radio); }}><Radio className="h-4 w-4" /></button>
+            <button className={`${chip} pointer-events-auto grid h-10 w-10 place-items-center text-white`} aria-label={voiceOn ? "Mute the voice guide (V)" : "Turn on the voice guide (V)"} title={voiceOn ? "Voice guide on (V)" : "Voice guide off (V)"} onClick={toggleVoice}>{voiceOn ? <Megaphone className="h-4 w-4" /> : <MegaphoneOff className="h-4 w-4 opacity-60" />}</button>
+            <button className={`${chip} pointer-events-auto grid h-10 w-10 place-items-center text-white ${station === "off" ? "opacity-50" : ""}`} aria-label={`Radio: ${STATIONS.find(x => x.id === station)!.name} (R to change)`} title={`${STATIONS.find(x => x.id === station)!.name} (R)`} onClick={cycleStation}><Radio className="h-4 w-4" /></button>
             <button className={`${chip} pointer-events-auto grid h-10 w-10 place-items-center text-white`} aria-label={muted ? "Unmute" : "Mute"} onClick={() => { cityAudio.setMuted(!muted); setMuted(!muted); }}>{muted ? <VolumeX className="h-4 w-4" /> : <Volume2 className="h-4 w-4" />}</button>
             <button className={`${chip} pointer-events-auto grid h-10 w-10 place-items-center text-white`} aria-label={paused ? "Resume" : "Pause"} onClick={() => setPaused(p => !p)}>{paused ? <Play className="h-4 w-4" /> : <Pause className="h-4 w-4" />}</button>
           </div>
@@ -209,6 +285,8 @@ export function SunburnCity() {
             </div>
           </div>
         )}
+        {radioNote && <div className="pointer-events-none absolute right-4 top-16 rounded-2xl bg-black/65 px-3 py-1.5 text-[13px] font-bold text-white">{radioNote}</div>}
+        <input ref={filePick} type="file" accept="audio/*" multiple className="hidden" onChange={e => onFiles(e.target.files)} />
         {hud.toast && !hud.card && <div className="pointer-events-none absolute left-1/2 top-24 max-w-[90%] -translate-x-1/2 rounded-2xl bg-black/60 px-4 py-2 text-center text-[14px] font-bold text-white backdrop-blur">{hud.toast}</div>}
         {hud.prompt && !hud.card && <div className="pointer-events-none absolute bottom-5 left-1/2 max-w-[60%] -translate-x-1/2 rounded-2xl bg-black/60 px-4 py-2 text-center text-[14px] font-bold text-white backdrop-blur">{hud.prompt}</div>}
 
@@ -223,7 +301,7 @@ export function SunburnCity() {
               <p className="mt-3 max-w-md text-[16px] font-semibold text-white/90">A Yeti on vacation. Borrow cars, jump the beach ramps, pull off comedy capers and keep the lifeguards off your tail.</p>
               <div className="mt-4 grid max-w-md grid-cols-2 gap-x-5 gap-y-1 text-left text-[13px] text-white/85">
                 <span><b>W A S D / arrows</b> drive or walk</span><span><b>Space</b> handbrake drift</span>
-                <span><b>E</b> get in or out, start a caper</span><span><b>H</b> horn · <b>R</b> radio · <b>N</b> snow · <b>F</b> fps · <b>P</b> pause</span>
+                <span><b>E</b> get in or out, start a caper</span><span><b>R</b> radio · <b>V</b> voice · <b>N</b> snow · <b>F</b> fps · <b>H</b> horn · <b>P</b> pause</span>
               </div>
               <button className="btn-primary mt-6 px-10 text-[18px]" onClick={begin}>Hit the beach</button>
             </div>
